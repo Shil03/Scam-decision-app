@@ -7,7 +7,7 @@ action="$1"; phase="$2"; notes="${3:-}"
 state=".timelog_state"
 now_iso=$(date '+%Y-%m-%d %H:%M:%S %z'); now_s=$(date +%s)
 if [[ ! -f TIMELOG.md ]]; then
-  printf '# Rebuild time log\n\nWall-clock times recorded by `tools/timelog.sh` at the start and end of each phase. Each phase also ends in its own git commit, so `git log --format="%%ad %%s" --date=iso` independently confirms the timeline.\n\n| Phase | Start | End | Duration | Notes |\n|---|---|---|---|---|\n' > TIMELOG.md
+  printf '# Build time log\n\nWall-clock times recorded by `tools/timelog.sh` at the start and end of each phase. Each phase also ends in its own git commit, so `git log --format="%%ad %%s" --date=iso` independently confirms the timeline.\n\n| Phase | Start | End | Duration | Notes |\n|---|---|---|---|---|\n' > TIMELOG.md
 fi
 case "$action" in
   start) echo "$phase|$now_iso|$now_s" > "$state"; echo "started: $phase at $now_iso" ;;
