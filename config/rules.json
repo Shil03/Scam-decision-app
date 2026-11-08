@@ -1,0 +1,19 @@
+{
+  "rule_set_version": "2026.11.1",
+  "thresholds": {
+    "new_payee_warn_amount": "1000.00",
+    "new_payee_hold_amount": "10000.00",
+    "cop_no_match_hold_amount": "5000.00",
+    "amount_anomaly_multiplier": "5",
+    "amount_anomaly_min_amount": "500.00",
+    "rapid_payee_additions_24h": 3,
+    "soft_signal_escalation_count": 3
+  },
+  "reference_keywords": {
+    "INVESTMENT_SCAM": ["crypto", "bitcoin", "investment", "trading"],
+    "IMPERSONATION_SCAM": ["ato", "tax debt", "police", "warrant"]
+  },
+  "dependencies": {
+    "mule_list_enabled": true
+  }
+}

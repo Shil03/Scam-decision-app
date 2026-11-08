@@ -98,7 +98,7 @@ Validation (failures REJECT):
 |---|---|
 | `payment_id`, `customer_id` | required, 1–64 chars, `[A-Za-z0-9-]` |
 | `channel` | `MOBILE` or `WEB` |
-| `amount` | Decimal (never float), > 0, at most 2 dp, ≤ `max_amount` (hard schema cap 1,000,000) |
+| `amount` | JSON string parsed to Decimal (never float), > 0, at most 2 dp, ≤ 1,000,000 (schema cap) |
 | `currency` | `AUD` only in this slice |
 | `payee.bsb` | `^\d{3}-?\d{3}$` |
 | `payee.account_number` | `^\d{6,10}$` |
@@ -202,12 +202,11 @@ The mule list is a JSON file, not a table, because it stands in for an upstream 
     "amount_anomaly_multiplier": "5",
     "amount_anomaly_min_amount": "500.00",
     "rapid_payee_additions_24h": 3,
-    "soft_signal_escalation_count": 3,
-    "max_amount": "1000000.00"
+    "soft_signal_escalation_count": 3
   },
   "reference_keywords": {
     "INVESTMENT_SCAM": ["crypto", "bitcoin", "investment", "trading"],
-    "IMPERSONATION_SCAM": ["ato", "tax debt", "police", "fine"]
+    "IMPERSONATION_SCAM": ["ato", "tax debt", "police", "warrant"]
   },
   "dependencies": { "mule_list_enabled": true }
 }

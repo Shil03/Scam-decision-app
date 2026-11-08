@@ -1,0 +1,10 @@
+[project]
+name = "app-shield"
+version = "0.1.0"
+description = "Authorised push payment (APP) scam decision service"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

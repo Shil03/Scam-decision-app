@@ -1,0 +1,8 @@
+{
+  "description": "Synthetic stub of the upstream mule account list. Not real accounts.",
+  "accounts": [
+    {"bsb": "999-001", "account_number": "11110001"},
+    {"bsb": "999-001", "account_number": "11110002"},
+    {"bsb": "999-002", "account_number": "22220001"}
+  ]
+}

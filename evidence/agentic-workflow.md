@@ -22,7 +22,23 @@ The build is split into gated steps: design, then engine, then API and persisten
 - The agent found PyYAML was not installed and chose JSON config (stdlib only) instead of adding a dependency.
 - The agent raised an open question instead of guessing: when the mule list is down, should fail-closed HOLD all payments or only payments to new payees? The intent says "affected payments". *Owner decision: HOLD all payments while the mule list is unavailable (strictest fail-closed reading; simplest to audit). Recorded as a decision record in Step 5.*
 - The owner then supplied the assessment brief. The agent restructured the repo to the brief's suggested layout (`evidence/`, `sample-data/`, `verify.py`). It also added technology trade-offs, the production and cloud shape, and CI/CD promotion to the design.
-- The owner asked to remove "rebuild" naming from the repo and time log, so the project is not mistaken for a re-creation of the assignment. The public repo will be named `app-shield`.
+- The owner asked to remove "rebuild" naming from the repo and time log, so the project is not mistaken for a re-creation of the assignment. The public repo was named `app-shield`, then renamed by the owner to `Scam-decision-app`.
+
+### Step 2: Engine
+
+**Steering prompt (excerpt):**
+> Yes, let's start with step 2.
+
+The agent built from the approved design §3 and §5. It wrote `app/schemas.py`, `app/config.py`, `app/mule_list.py`, `app/rules.py`, `app/engine.py`, and unit tests whose expected outcomes come from the design's decision table.
+
+**Interventions and review:**
+- The keyword "fine" was dropped from `IMPERSONATION_SCAM` and replaced with "warrant", because "fine dining" would trigger a scam warning. This was caught while writing the tests.
+- The config `max_amount` was removed from the design. A request cap that depends on config would make validation depend on config, so a single schema cap (1,000,000) is used instead. Validation stays static.
+- **All 69 tests passed on the first run.** That alone proves little, so the agent ran a **mutation check**: it deliberately broke the code four ways and confirmed at least one test failed each time:
+  - the warn boundary changed from `>=` to `>`;
+  - a mule-list outage ignored (fail open);
+  - the remote-access rule firing alongside the remote-access new-payee rule;
+  - dependency hits no longer causing HOLD.
 
 ## How generated output is verified
 
