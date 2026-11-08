@@ -57,6 +57,29 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
 - **Precedence:** the prompt lists dependencies → hard → soft. The engine evaluates all rules after validation, then applies that precedence. The outcome is identical, but the analyst sees every signal on a HOLD, not just the first.
 - **Tests:** 87 pass (18 new). A second mutation check introduced four bugs: enrichment before validation, errors echoing input, a mule exception crashing the request, and HOLD asking for customer confirmation. A test failed for each one.
 
+### Step 3: API and persistence
+
+**Steering prompt (excerpt):**
+> Implement the complete APP Shield REST API and persistence layer. Create app/main.py, app/api/payments.py, app/database.py, app/models/entities.py, app/services/enrichment.py, app/services/mule_service.py, app/services/audit_service.py. Required endpoints: POST /payments/assess, GET /review-queue, GET /review-queue/{payment_id}, GET /health, GET /config/rules. […] Unique payment and correlation IDs. Structured JSON logging. UTC timestamps. […] Keep only necessary data in review records. Do not log raw account numbers […]. Create integration tests for the full workflow. Do not add a frontend or real banking integration.
+
+**What the agent did:**
+- built the files requested;
+- added `app/api/operations.py` (health and config), `app/state.py` (shared service objects) and `app/logging_setup.py`, so that `payments.py` holds only payment and review routes;
+- added 23 integration tests over HTTP against a real SQLite file.
+
+**Interventions and review:**
+- **Duplicate IDs.** "Unique payment and correlation IDs" did not say what a duplicate should do. The agent chose idempotent replay for an identical retry and 409 REJECT for a conflicting reuse, because a payment channel that times out will retry.
+- **The agent caught its own SQL bug before running anything.** A join between `review_queue` and `decisions` would have failed on ambiguous columns, so every queue column is now prefixed with its table.
+- **A broad command was blocked, and that was correct.** The agent's first live-server check ended with a command that force-killed every `python.exe`. Claude Code's permission check denied it. The agent re-ran the server as a tracked background task and stopped only that task.
+- **Live check:** under uvicorn, a payment with remote access, a new payee and a payee-name mismatch returned HOLD with five reason codes and was queued at priority 2. A malformed body returned 422.
+- **Mutation check:** five bugs were introduced, and a test failed for each one:
+  - a database write failure keeps the original decision (fail open);
+  - the raw account number is logged;
+  - retries are not replayed;
+  - `/health` ignores the mule list;
+  - a HOLD is not queued.
+- **Totals:** 110 tests pass, 23 of them new.
+
 ## How generated output is verified
 
 - Every step is reviewed by a human before commit. No commit is made without approval.

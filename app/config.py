@@ -124,3 +124,33 @@ class ConfigStore:
     def _record_error(self, message: str) -> None:
         self.last_error = message
         log.error("%s; keeping version=%s", message, self._current.rules.ruleset_version)
+
+
+# ---------- runtime settings (environment, not rules) ----------
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEV_TOKEN_KEY = "dev-only-token-key-not-secret"
+
+
+@dataclass(frozen=True)
+class Settings:
+    config_path: Path
+    mule_list_path: Path
+    db_path: Path
+    token_key: str
+    max_body_bytes: int = 16_384
+
+    @property
+    def token_key_is_default(self) -> bool:
+        return self.token_key == DEV_TOKEN_KEY
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        import os
+        env = os.environ.get
+        return cls(
+            config_path=Path(env("APP_SHIELD_CONFIG", PROJECT_ROOT / "config" / "rules.json")),
+            mule_list_path=Path(env("APP_SHIELD_MULE_LIST", PROJECT_ROOT / "sample-data" / "mule_accounts.json")),
+            db_path=Path(env("APP_SHIELD_DB", PROJECT_ROOT / "data" / "app_shield.db")),
+            token_key=env("APP_SHIELD_TOKEN_KEY", DEV_TOKEN_KEY),
+        )

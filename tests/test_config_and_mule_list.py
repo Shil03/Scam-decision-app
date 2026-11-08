@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.config import ConfigError, ConfigStore
-from app.mule_list import MuleList, MuleResult
+from app.services.mule_service import MuleService, MuleResult
 from tests.conftest import DEFAULT_MULE_LIST, write_json
 
 
@@ -74,7 +74,7 @@ def test_no_valid_config_at_startup_refuses_to_start(tmp_path):
 
 
 def test_mule_list_match_and_no_match():
-    mules = MuleList(DEFAULT_MULE_LIST)
+    mules = MuleService(DEFAULT_MULE_LIST)
     assert mules.check("999-001", "11110001", enabled=True) is MuleResult.MATCH
     assert mules.check("999001", "11110001", enabled=True) is MuleResult.MATCH
     assert mules.check("062-000", "12345678", enabled=True) is MuleResult.NO_MATCH
@@ -82,15 +82,15 @@ def test_mule_list_match_and_no_match():
 
 
 def test_mule_list_switched_off_is_unavailable():
-    mules = MuleList(DEFAULT_MULE_LIST)
+    mules = MuleService(DEFAULT_MULE_LIST)
     assert mules.check("999-001", "11110001", enabled=False) is MuleResult.UNAVAILABLE
     assert mules.status(enabled=False) == "disabled"
 
 
 def test_mule_list_missing_or_corrupt_is_unavailable(tmp_path):
-    assert MuleList(tmp_path / "nope.json").check("062-000", "12345678", enabled=True) is MuleResult.UNAVAILABLE
+    assert MuleService(tmp_path / "nope.json").check("062-000", "12345678", enabled=True) is MuleResult.UNAVAILABLE
     corrupt = tmp_path / "corrupt.json"
     corrupt.write_text('{"accounts": [{"bsb": "1"}]}', encoding="utf-8")
-    mules = MuleList(corrupt)
+    mules = MuleService(corrupt)
     assert mules.check("062-000", "12345678", enabled=True) is MuleResult.UNAVAILABLE
     assert mules.status(enabled=True) == "down"

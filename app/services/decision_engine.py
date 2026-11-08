@@ -18,7 +18,8 @@ import logging
 from dataclasses import dataclass, field
 
 from app.config import RuleConfig
-from app.mule_list import MuleList, MuleResult
+from app.services.enrichment import MuleLookup, enrich
+from app.services.mule_service import MuleResult
 from app.schemas import Category, FieldError, Outcome, PaymentRequest, ScamCategory
 from app.services.rules import DEPENDENCY_RULES, HARD_RULES, SOFT_RULES, Rule, RuleContext, RuleHit
 from app.services.validator import validate_payment
@@ -108,19 +109,10 @@ def safe_evaluate(request: PaymentRequest, mule: MuleResult, config: RuleConfig,
         return fail_closed(correlation_id, config.ruleset_version, request)
 
 
-def _check_mule_list(request: PaymentRequest, mule_list: MuleList, config: RuleConfig) -> MuleResult:
-    try:
-        return mule_list.check(request.payee.bsb, request.payee.account_number,
-                               enabled=config.dependencies.mule_list_enabled)
-    except Exception as exc:  # noqa: BLE001 - an unhealthy dependency is unavailable, not fatal
-        log.error("mule list check failed: %s", exc.__class__.__name__)
-        return MuleResult.UNAVAILABLE
-
-
-def assess(payload: object, correlation_id: str, config: RuleConfig, mule_list: MuleList) -> Decision:
+def assess(payload: object, correlation_id: str, config: RuleConfig, mule_service: MuleLookup) -> Decision:
     """Full pipeline for one payment: validate, enrich (mule list), score, decide."""
     validation = validate_payment(payload)
     if not validation.ok:
         return Decision(correlation_id, Outcome.REJECT, errors=validation.errors)
-    mule = _check_mule_list(validation.request, mule_list, config)
-    return safe_evaluate(validation.request, mule, config, correlation_id)
+    signals = enrich(validation.request, config, mule_service)
+    return safe_evaluate(validation.request, signals.mule, config, correlation_id)

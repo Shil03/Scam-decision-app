@@ -3,14 +3,14 @@
 import pytest
 
 from app.config import ConfigStore
-from app.mule_list import MuleList, MuleResult
+from app.services.mule_service import MuleService, MuleResult
 from app.schemas import Outcome
 from app.services.decision_engine import assess
 from app.services.validator import validate_payment
 from tests.conftest import DEFAULT_CONFIG, DEFAULT_MULE_LIST, payment
 
 CONFIG = ConfigStore(DEFAULT_CONFIG).get().rules
-MULES = MuleList(DEFAULT_MULE_LIST)
+MULE_SERVICE = MuleService(DEFAULT_MULE_LIST)
 CONTRACT_KEYS = {"decision", "reason_codes", "ruleset_version", "correlation_id"}
 
 
@@ -86,7 +86,7 @@ def test_flags_tell_the_channel_what_to_do():
 
 def test_mule_list_switched_off_in_config_holds():
     off = CONFIG.model_copy(update={"dependencies": CONFIG.dependencies.model_copy(update={"mule_list_enabled": False})})
-    decision = assess(payment(), "c", off, MULES)
+    decision = assess(payment(), "c", off, MULE_SERVICE)
     assert decision.outcome is Outcome.HOLD and decision.reason_codes == ["MULE_LIST_UNAVAILABLE"]
     assert decision.degraded
 
@@ -97,7 +97,7 @@ def test_mule_list_raising_holds_instead_of_crashing():
 
 
 def test_real_stub_matches_synthetic_mule_account():
-    decision = assess(payment(payee={"bsb": "999-001", "account_number": "11110001"}), "c", CONFIG, MULES)
+    decision = assess(payment(payee={"bsb": "999-001", "account_number": "11110001"}), "c", CONFIG, MULE_SERVICE)
     assert decision.outcome is Outcome.HOLD and decision.reason_codes == ["MULE_ACCOUNT_MATCH"]
 
 

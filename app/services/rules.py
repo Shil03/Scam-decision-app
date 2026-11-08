@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Callable
 
 from app.config import Thresholds
-from app.mule_list import MuleResult
+from app.services.mule_service import MuleResult
 from app.schemas import Category, CopStatus, HistoryStatus, PaymentRequest, RemoteAccess, ScamCategory
 
 

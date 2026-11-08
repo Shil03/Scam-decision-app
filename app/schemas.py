@@ -155,7 +155,7 @@ class DecisionResponse(BaseModel):
     requires_customer_confirmation: bool
     reasons: list[Reason] = Field(min_length=1)
     decision_id: str
-    payment_id: str
+    payment_id: str | None
     review_id: str | None
     degraded: bool
     evaluated_at: str

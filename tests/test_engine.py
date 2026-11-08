@@ -8,7 +8,7 @@ import pytest
 from app.services import decision_engine as engine_module
 from app.config import ConfigStore
 from app.services.decision_engine import evaluate, safe_evaluate
-from app.mule_list import MuleResult
+from app.services.mule_service import MuleResult
 from app.schemas import Category, Outcome, PaymentRequest, ScamCategory
 from tests.conftest import DEFAULT_CONFIG, payment
 

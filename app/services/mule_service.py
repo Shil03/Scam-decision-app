@@ -24,7 +24,9 @@ def account_key(bsb: str, account_number: str) -> str:
     return f"{bsb.replace('-', '')}:{account_number}"
 
 
-class MuleList:
+class MuleService:
+    """Mule-list dependency. Path is configurable; the enabled switch lives in config/rules.json."""
+
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._signature: tuple[int, int] | None = None

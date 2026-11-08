@@ -8,7 +8,7 @@ One FastAPI process with a pure, deterministic rules engine at its centre. Every
 
 ```
  Payment channel
-      │  POST /v1/payments/assess   (X-Correlation-ID optional)
+      │  POST /payments/assess   (X-Correlation-ID optional)
       ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ main.py      routes, correlation-ID middleware, error handlers    │
@@ -54,20 +54,27 @@ Only installed dependencies are used: FastAPI, Pydantic, Uvicorn, pytest, httpx 
 
 | Method | Path | Purpose | Status codes |
 |---|---|---|---|
-| POST | `/v1/payments/assess` | Assess one payment before release | 200 for ALLOW, WARN, HOLD · 422 for REJECT |
-| GET | `/v1/review-queue` | List held payments (`?status=PENDING`, default) | 200 |
-| GET | `/health` | Liveness plus dependency state | 200 `ok` or `degraded` |
+| POST | `/payments/assess` | Assess one payment before release | 200 for ALLOW, WARN, HOLD · 422 REJECT (invalid) · 409 REJECT (duplicate ID) · 413 REJECT (body > 16 KB) |
+| GET | `/review-queue` | Held payments awaiting review, by priority (`?limit=`, default 50) | 200 · 503 if the store is down |
+| GET | `/review-queue/{payment_id}` | One held payment: reasons, signals used, ruleset version, config hash | 200 · 404 if not held |
+| GET | `/health` | Dependency state: mule list, database, config | 200 with `ok` or `degraded` |
+| GET | `/config/rules` | Active thresholds, keywords, ruleset version and config hash (no secrets) | 200 |
 
 Design choices:
 
 - **ALLOW, WARN and HOLD return 200.** They are decisions, not errors. The channel acts on `decision` in the body.
 - **REJECT returns 422** with the same envelope (`decision: "REJECT"`), so the channel parses one shape. Invalid JSON, wrong types, missing fields, unknown fields and failed business validation (for example amount ≤ 0) all REJECT. The engine is never called.
+- **Unique IDs and retries:**
+  - **Same `payment_id`, same payload:** the stored decision is replayed with header `Idempotent-Replay: true`, so a channel retrying after a timeout gets the same answer even if config has changed since.
+  - **Same `payment_id`, different payload:** 409 REJECT.
+  - **Correlation ID already used for another payment:** 409 REJECT.
+  - **Database:** both IDs are `UNIQUE` columns.
 - **Correlation ID:** taken from the `X-Correlation-ID` header if present and well formed (≤ 64 chars, `[A-Za-z0-9-]`), otherwise generated (UUID4). It is echoed in the response header, the body, the log line and the DB row.
 - **Channel contract:** a timeout, connection error or 5xx from this service must be treated as HOLD by the channel. This is documented, not enforced, because the channel is out of scope.
 
 ## 3. Request and response schemas
 
-### Request: `POST /v1/payments/assess`
+### Request: `POST /payments/assess`
 
 ```json
 {
@@ -189,6 +196,8 @@ Errors list the field path and message only. Pydantic's `input` echo is stripped
 | `created_at` TEXT | |
 
 The decision row and the queue row are written in a single transaction. The raw account number, account name and reference are **never** persisted.
+
+**`rejections`**: one row per REJECT. It stores `correlation_id`, `payment_id` (only if well formed) and error field paths and messages, never the submitted values.
 
 The mule list is a JSON file, not a table, because it stands in for an upstream service and must be switchable off.
 
@@ -325,7 +334,7 @@ The log has no account number, BSB, payee name, reference text or customer ID. T
 | 7 | **No authn/authz** on the review queue, which exposes customer and payment data | Out of scope per intent; data minimised (masked payee) | AuthN plus role-based access for analysts |
 | 8 | **Latency in the synchronous path** | Engine is O(rules) with no network calls; one SQLite transaction; latency recorded per decision | p99 SLO, load test, async audit writer |
 | 9 | **SQLite single-writer contention** | WAL mode; short transactions | Managed RDBMS |
-| 10 | **Duplicate `payment_id` or retries** could produce a different decision after a config change | Every attempt is recorded and the decision is deterministic for the same config | Idempotency key that replays the stored decision |
+| 10 | **Duplicate `payment_id` or retries** could produce a different decision after a config change | Same payload replays the stored decision; a different payload gets 409 REJECT. Two simultaneous first attempts: the UNIQUE constraint rejects the second write, which then fails closed (HOLD) | Distributed idempotency store |
 | 11 | **Oversized or abusive payloads** | Length caps on every string, an amount cap and a body size limit | Gateway rate limiting |
 | 12 | **Floating-point money errors** at threshold boundaries | `Decimal` end to end; JSON numbers with a fraction are rejected; boundary tests | — |
 | 13 | **Friction fatigue** (too many WARNs train customers to click through) | New payee alone does not warn; decision mix is visible in the logs | Monitor WARN rate and confirm-through rate per rule; tune thresholds |
