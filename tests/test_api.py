@@ -7,50 +7,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
 import sqlite3
-from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.api import payments as payments_api
-from app.config import Settings
 from app.logging_setup import JsonFormatter
-from app.main import create_app
-from tests.conftest import DEFAULT_CONFIG, DEFAULT_MULE_LIST, payment, write_json
+from tests.conftest import payment
+from tests.support import ApiEnv as Env
 
 MULE_PAYEE = {"bsb": "999-001", "account_number": "11110001", "account_name": "Mule Holdings"}
 NEW_PAYEE = {"customer_history": {"previously_paid_payee": False}}
-
-
-class Env:
-    def __init__(self, tmp: Path):
-        self.config = tmp / "rules.json"
-        self.mules = tmp / "mule_accounts.json"
-        self.db = tmp / "app_shield.db"
-        shutil.copy(DEFAULT_CONFIG, self.config)
-        shutil.copy(DEFAULT_MULE_LIST, self.mules)
-        self.app = create_app(Settings(config_path=self.config, mule_list_path=self.mules,
-                                       db_path=self.db, token_key="test-key"))
-        self.client = TestClient(self.app)
-
-    def assess(self, body: dict, correlation_id: str | None = None):
-        headers = {"X-Correlation-ID": correlation_id} if correlation_id else {}
-        return self.client.post("/payments/assess", json=body, headers=headers)
-
-    def edit_config(self, change) -> None:
-        data = json.loads(self.config.read_text())
-        change(data)
-        write_json(self.config, data)
-        st = self.config.stat()
-        os.utime(self.config, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-
-    def rows(self, sql: str) -> list[dict]:
-        with sqlite3.connect(self.db) as conn:
-            conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(sql)]
 
 
 @pytest.fixture

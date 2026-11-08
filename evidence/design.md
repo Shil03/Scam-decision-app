@@ -45,7 +45,7 @@ config/rules.json    thresholds, keyword lists, rule-set version, dependency swi
 sample-data/mule_accounts.json
 sample-data/requests/   example ALLOW / WARN / HOLD / REJECT requests
 tests/               unit tests + labelled scenario suite
-verify.py            single verify command
+verify.sh            single verify command (CI entry point)
 ```
 
 Only installed dependencies are used: FastAPI, Pydantic, Uvicorn, pytest, httpx (TestClient) and the standard library (`sqlite3`, `json`, `hmac`, `logging`). The config is JSON so no YAML library is needed.
@@ -272,7 +272,7 @@ Overall order: **REJECT > HOLD > WARN > ALLOW.**
 
 ## 6. Synthetic scenario suite
 
-Scenarios live in `tests/scenarios/scenarios.json`. Each entry has an id, description, request, optional config overrides, optional `mule_list_enabled`, the expected decision and the expected reason codes. They run through the real HTTP app (TestClient), a temporary SQLite file and a temporary config. The single verify command is `python verify.py`, which wraps `pytest`.
+Scenarios live in `tests/scenarios/scenarios.json`. Each entry has an id, description, request, optional config overrides, optional `mule_list_enabled`, the expected decision and the expected reason codes. They run through the real HTTP app (TestClient), a temporary SQLite file and a temporary config. The single verify command is `./verify.sh`. It runs environment checks, config validation and repository hygiene, then all tests, and writes `reports/scenario-report.md` with expected versus actual results.
 
 | ID | Scenario | Expected |
 |---|---|---|
@@ -374,7 +374,7 @@ The repo layout follows the brief: `app/`, `tests/`, `sample-data/` and `evidenc
 | 1 | Design (this document), evidence folder, agentic-workflow log started | 20 min |
 | 2 | Engine: `schemas.py`, `config.py`, `mule_list.py`, `rules.py`, `engine.py` + unit tests, `requirements.txt` | 45 min |
 | 3 | API, persistence and logging: `main.py`, `store.py`, `privacy.py`, `logging_setup.py`, `/health`, review queue, `sample-data/` example requests | 45 min |
-| 4 | Scenario suite, cross-cutting tests, `verify.py` (the one command CI would run: tests + config validation + a scan for sensitive values in logs) | 30 min |
+| 4 | Scenario suite, cross-cutting tests, `verify.sh` (the one command CI would run: tests + config validation + a scan for sensitive values in logs) | 30 min |
 | 5 | README (brief's required sections) and evidence pack: `verify.md`, `operate.md`, `decisions.md`, final pass on `agentic-workflow.md` | 30 min |
 
 The steps total 170 minutes, leaving about 10 minutes of buffer. Packaging (the final push and submission notes) uses the separate 15-minute allowance.

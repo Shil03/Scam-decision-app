@@ -21,7 +21,7 @@ The build is split into gated steps: design, then engine, then API and persisten
 **Interventions and review:**
 - The agent found PyYAML was not installed and chose JSON config (stdlib only) instead of adding a dependency.
 - The agent raised an open question instead of guessing: when the mule list is down, should fail-closed HOLD all payments or only payments to new payees? The intent says "affected payments". *Owner decision: HOLD all payments while the mule list is unavailable (strictest fail-closed reading; simplest to audit). Recorded as a decision record in Step 5.*
-- The owner then supplied the assessment brief. The agent restructured the repo to the brief's suggested layout (`evidence/`, `sample-data/`, `verify.py`). It also added technology trade-offs, the production and cloud shape, and CI/CD promotion to the design.
+- The owner then supplied the assessment brief. The agent restructured the repo to the brief's suggested layout (`evidence/`, `sample-data/`, `verify.sh`). It also added technology trade-offs, the production and cloud shape, and CI/CD promotion to the design.
 - The owner asked to remove "rebuild" naming from the repo and time log, so the project is not mistaken for a re-creation of the assignment. The public repo was named `app-shield`, then renamed by the owner to `Scam-decision-app`.
 
 ### Step 2: Engine
@@ -79,6 +79,24 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
   - `/health` ignores the mule list;
   - a HOLD is not queued.
 - **Totals:** 110 tests pass, 23 of them new.
+
+### Step 4: Scenario suite and verify command
+
+**Steering prompt (excerpt):**
+> Act as a Senior Banking QA Automation Engineer. Build a labelled synthetic scenario suite for APP Shield. […] For each scenario, verify: expected decision, actual decision, expected reason codes, actual reason codes, ruleset version, correlation ID, persistence behaviour, whether the request was scored. […] Create verify.sh that executes all checks and exits non-zero on failure. Execute the tests. Report actual results, not assumed results.
+
+**What the agent did:**
+- **Scenarios as data.** 34 labelled scenarios (22 assessed, 12 REJECT) live in `tests/scenarios/scenarios.json`, so a reviewer can read and extend them without reading Python.
+- **One runner checks every scenario.** `tests/test_scenarios.py` sends each one over HTTP to a fresh app and SQLite file. It wraps the engine and the mule lookup with call counters, to prove whether the request was scored and enriched. It checks up to 13 properties per scenario and writes `reports/scenario-report.md` from the actual responses and database rows.
+- **Acceptance checks.** `tests/test_acceptance.py` holds the eight checks the owner listed, swept across the whole suite where possible. For example, "mule-list failure can never return ALLOW" runs every assessed scenario under four failure modes: switched off, file missing, file corrupt, and lookup raising.
+- **One command for CI.** `verify.sh` checks the Python version and dependencies, byte-compiles the app, validates the shipped config and mule stub, checks repository hygiene (no tracked databases, PDFs or obvious secrets), then runs all tests.
+
+**Interventions and review:**
+- **"Remote-access session → HOLD" did not match the approved design.** Under the design, remote access to a new payee is HOLD, but to a known payee it is WARN. The agent labelled both cases (S08 HOLD, S07 WARN) instead of silently changing a rule, and flagged it to the owner.
+- **"Unusual pattern → configured intended decision"** is covered twice: S10 shows the default (SOFT → WARN), and S22 shows the same payment becoming ALLOW after the multiplier is tuned in config.
+- **One test failed on its first run, and the bug was in the test.** The ruleset-version check sampled only S01–S05, which contain no HOLD, so it compared an empty review queue. The sample was widened to S01–S09, and the assertion tightened to require both ruleset versions in the queue.
+- **`verify.sh` was proven to fail.** With the remote-access/new-payee rule disabled, it exited 1 with 4 failing tests. The report showed `S08 | expected HOLD | actual ALLOW | FAIL`. The rule was then restored, and a clean run exited 0.
+- **Actual result:** 155 tests passed, the scenario report shows 34/34 PASS, and `verify.sh` exits 0.
 
 ## How generated output is verified
 
