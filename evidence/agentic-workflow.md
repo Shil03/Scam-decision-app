@@ -16,7 +16,8 @@
 | 2b | Owner's engine specification: `services/` layout, reason-code vocabulary, contract fields | 10:20 |
 | 3 | Owner's API and persistence specification: five endpoints, unique IDs, logging, privacy | 10:32 |
 | 4 | "Act as a Senior Banking QA Automation Engineer": scenario suite, acceptance checks, `verify.sh` | 10:38 |
-| 5 | Documentation against the actual implementation | see `git log` |
+| 5 | Documentation against the actual implementation | 10:48 |
+| 6 | Independent senior engineering review; fix critical defects only | see `git log` |
 
 Agent working time per step is in [TIMELOG.md](../TIMELOG.md). Between steps, the owner reviewed the summary and the diff, and either approved it or steered with the next prompt.
 
@@ -142,11 +143,36 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
 - **A real usability bug found while capturing examples.** A negative amount produced "must be a decimal string with at most 2 decimal places", which is technically true but not a *clear* error (success criterion 4). The format check now allows a sign, so negatives reach the bound check and say "Input should be greater than 0". A test pins the messages.
 - **Final run:** 159 tests passed, 34/34 scenarios, `verify.sh` exit 0.
 
+### Step 6: Independent review
+
+**Steering prompt (excerpt):**
+> Perform an independent senior engineering review of APP Shield against the original technical assessment and project intent. Prioritise these critical acceptance requirements: […] Inspect for: decision precedence defects, fail-open paths, missing validation, race conditions and persistence issues, inconsistent rule versions, sensitive information in logs, inaccurate documentation. Run the verification command and report actual results. Fix critical defects only. Do not introduce new features or restructure working components unnecessarily.
+
+**What the agent did:**
+- **Treated green tests as a baseline, not proof.** `verify.sh` passed (159 tests, 34/34), so the agent probed the running app with inputs the suite did not cover: Unicode digits, deep nesting, duplicate keys, `NaN` tokens, nulls, and control characters in IDs.
+- **Read the remaining paths:** concurrency, replay and the safety net.
+
+**Findings:** four defects (F1–F4) and one documentation inaccuracy. The full table is in [verify.md](verify.md#independent-review-step-6).
+- **The most serious was F1.** A mule account written in fullwidth digits was **ALLOWED**. The 159 passing tests had never exercised this.
+
+**Interventions and review:**
+- **Every finding was reproduced before it was fixed.** Every fix got a regression test (10 in total, including scenarios R13 and R14).
+- **The new tests were then run against the original Step 5 code:** all 10 failed. That proves both that the defects were real and that the tests detect them.
+- **One new test was wrong at first.** It patched `json.loads` globally, which also broke the test client. It was re-scoped to the payments module.
+- **Fixes stayed minimal**, as the prompt asked:
+  - two regex patterns;
+  - one parser hook;
+  - one extra exception type;
+  - one extra log call.
+
+  Five accepted risks are recorded instead of fixed, because fixing them would add features.
+- **Result:** 169 tests passed, 36/36 scenarios, `verify.sh` exit 0.
+
 ## How generated output is verified
 
 - Every step is reviewed by a human before commit. No commit is made without approval.
 - Behaviour is pinned by the labelled scenario suite. Expected outcomes were written in the design **before** the code, so tests check the agent against an independent specification, not against its own implementation.
 - Privacy is checked by an automated scan of logs and the database for raw account numbers, names and references, rather than by reading code.
-- **Tests were tested.** At each build step the agent deliberately introduced bugs (14 in total) and confirmed a test failed for each one. It also proved `verify.sh` exits 1 on a broken rule. See [verify.md](verify.md).
+- **Tests were tested.** At each build step the agent deliberately introduced bugs (14 in total, plus reverting the Step 6 fixes) and confirmed a test failed for each one. It also proved `verify.sh` exits 1 on a broken rule. See [verify.md](verify.md).
 - **Examples are real.** Response and log examples in the README and design were captured from the running code.
 - **The human stays accountable.** The owner reviewed each step's summary before approving the commit, and owns every design decision recorded in [decisions.md](decisions.md).

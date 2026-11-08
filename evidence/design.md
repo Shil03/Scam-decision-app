@@ -96,12 +96,12 @@ OpenAPI documentation is served at `/docs` while the app runs.
 | `channel` | `MOBILE` or `WEB` |
 | `amount` | **JSON string**, parsed to `Decimal`; > 0, at most 2 dp, ≤ 1,000,000. A JSON number is rejected so floats never touch money |
 | `currency` | `AUD` only |
-| `payee.bsb` / `payee.account_number` / `payee.account_name` | `^\d{3}-?\d{3}$` / `^\d{6,10}$` / 1–140 chars |
+| `payee.bsb` / `payee.account_number` / `payee.account_name` | `^[0-9]{3}-?[0-9]{3}$` / `^[0-9]{6,10}$` (ASCII digits only) / 1–140 chars |
 | `reference` | optional, ≤ 140 chars |
 | `confirmation_of_payee.status` | `MATCH`, `CLOSE_MATCH`, `NO_MATCH`, `UNAVAILABLE` |
 | `session.remote_access` | `DETECTED`, `NOT_DETECTED`, `UNAVAILABLE` |
 | `customer_history` | `status: AVAILABLE` with all four fields (strict bool/int, non-negative), or `status: UNAVAILABLE` with none |
-| anything else | unknown fields are rejected |
+| anything else | unknown fields and duplicate JSON keys are rejected |
 
 **Missing vs unavailable.** A missing block is a malformed request: REJECT. A block sent as `UNAVAILABLE` means the upstream dependency failed: HOLD. This separates "the caller sent something wrong" from "a dependency is down".
 
@@ -201,7 +201,7 @@ All amount comparisons use `Decimal` and `≥`, and every boundary has a test. A
 
 ## 6. Scenario suite
 
-34 labelled synthetic scenarios live as data in `tests/scenarios/scenarios.json`: S01–S22 assessed, R01–R12 rejected. Each runs over HTTP against a fresh app and SQLite file. The runner checks the expected and actual decision and reason codes, ruleset version, correlation ID, persistence, and whether the request was scored and enriched (call counters). It writes `reports/scenario-report.md`. See [verify.md](verify.md) for results.
+36 labelled synthetic scenarios live as data in `tests/scenarios/scenarios.json`: S01–S22 assessed, R01–R14 rejected. Each runs over HTTP against a fresh app and SQLite file. The runner checks the expected and actual decision and reason codes, ruleset version, correlation ID, persistence, and whether the request was scored and enriched (call counters). It writes `reports/scenario-report.md`. See [verify.md](verify.md) for results.
 
 ## 7. Logging
 
@@ -235,6 +235,7 @@ Every log line is one JSON object on stdout with a UTC `ts` (milliseconds, `Z`),
 | 9 | **SQLite single writer** | WAL; short transactions | Managed Postgres |
 | 10 | **Retries and duplicates** | Identical retry replays; conflicting reuse gets 409. Two simultaneous first attempts: the second write hits the UNIQUE constraint and fails closed (HOLD) | Distributed idempotency store |
 | 11 | **Oversized or abusive payloads** | 16 KB body cap, length caps, amount cap | Gateway rate limiting |
+| 11a | **Look-alike input** (non-ASCII digits that never match the mule list; duplicate JSON keys giving two different amounts) | ASCII-only `[0-9]` patterns; duplicate keys rejected. Both were found in the Step 6 review; scenarios R13 and R14 guard them | Canonicalise identifiers at the channel boundary |
 | 12 | **Floating-point money** | Money is a decimal string, never a JSON number; `Decimal` throughout | — |
 | 13 | **Friction fatigue** | New payee alone does not warn; decision mix visible in logs | Per-rule WARN and confirm-through monitoring |
 | 14 | **Data retention** | Synthetic data only; no raw account, name or reference stored | Retention and purge policy |

@@ -6,10 +6,18 @@
     "channel": "MOBILE",
     "amount": "250.00",
     "currency": "AUD",
-    "payee": {"bsb": "062-000", "account_number": "12345678", "account_name": "Jordan Citizen"},
+    "payee": {
+      "bsb": "062-000",
+      "account_number": "12345678",
+      "account_name": "Jordan Citizen"
+    },
     "reference": "Rent November",
-    "confirmation_of_payee": {"status": "MATCH"},
-    "session": {"remote_access": "NOT_DETECTED"},
+    "confirmation_of_payee": {
+      "status": "MATCH"
+    },
+    "session": {
+      "remote_access": "NOT_DETECTED"
+    },
     "customer_history": {
       "status": "AVAILABLE",
       "previously_paid_payee": true,
@@ -19,148 +27,571 @@
     }
   },
   "scenarios": [
-    {"id": "S01", "name": "Clean payment to a known payee",
-     "changes": {},
-     "expected": {"decision": "ALLOW", "reason_codes": ["NO_RISK_SIGNAL"]}},
-
-    {"id": "S02", "name": "New payee, small amount",
-     "changes": {"customer_history": {"previously_paid_payee": false}},
-     "expected": {"decision": "ALLOW", "reason_codes": ["NO_RISK_SIGNAL"]}},
-
-    {"id": "S03", "name": "New payee with high amount (exactly at the warn threshold)",
-     "changes": {"amount": "1000.00", "customer_history": {"previously_paid_payee": false}},
-     "expected": {"decision": "WARN", "reason_codes": ["NEW_PAYEE_HIGH_VALUE"], "scam_category": "GENERAL_SCAM"}},
-
-    {"id": "S04", "name": "Payee name close match",
-     "changes": {"confirmation_of_payee": {"status": "CLOSE_MATCH"}},
-     "expected": {"decision": "WARN", "reason_codes": ["PAYEE_CLOSE_MATCH"], "scam_category": "INVOICE_SCAM"}},
-
-    {"id": "S05", "name": "Payee mismatch (Confirmation of Payee NO_MATCH), low amount",
-     "changes": {"confirmation_of_payee": {"status": "NO_MATCH"}},
-     "expected": {"decision": "WARN", "reason_codes": ["PAYEE_MISMATCH"], "scam_category": "INVOICE_SCAM"}},
-
-    {"id": "S06", "name": "Payee mismatch at or above the hold amount",
-     "changes": {"amount": "5000.00", "confirmation_of_payee": {"status": "NO_MATCH"},
-                 "customer_history": {"avg_amount_90d": "4000.00"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["PAYEE_MISMATCH_HIGH_VALUE"], "scam_category": "INVOICE_SCAM"}},
-
-    {"id": "S07", "name": "Remote-access session, payment to a known payee",
-     "changes": {"session": {"remote_access": "DETECTED"}},
-     "expected": {"decision": "WARN", "reason_codes": ["REMOTE_ACCESS_DETECTED"], "scam_category": "REMOTE_ACCESS_SCAM"}},
-
-    {"id": "S08", "name": "Remote-access session, payment to a new payee",
-     "changes": {"session": {"remote_access": "DETECTED"}, "customer_history": {"previously_paid_payee": false}},
-     "expected": {"decision": "HOLD", "reason_codes": ["REMOTE_ACCESS_NEW_PAYEE"], "scam_category": "REMOTE_ACCESS_SCAM"}},
-
-    {"id": "S09", "name": "Mule account match, everything else clean",
-     "changes": {"payee": {"bsb": "999-001", "account_number": "11110001", "account_name": "Quick Cash Pty"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["MULE_ACCOUNT_MATCH"], "scam_category": "MULE_PAYEE"}},
-
-    {"id": "S10", "name": "Unusual payment pattern: 8x the customer's 90-day average (configured as SOFT -> WARN)",
-     "changes": {"amount": "2400.00"},
-     "expected": {"decision": "WARN", "reason_codes": ["UNUSUAL_PAYMENT_PATTERN"], "scam_category": "GENERAL_SCAM"}},
-
-    {"id": "S11", "name": "New payee at or above the hold amount",
-     "changes": {"amount": "12000.00", "customer_history": {"previously_paid_payee": false, "avg_amount_90d": "9000.00"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["NEW_PAYEE_VERY_HIGH_VALUE"], "scam_category": "GENERAL_SCAM"}},
-
-    {"id": "S12", "name": "Investment-scam language in the payment reference",
-     "changes": {"reference": "Bitcoin investment top-up"},
-     "expected": {"decision": "WARN", "reason_codes": ["SCAM_KEYWORD_IN_REFERENCE"], "scam_category": "INVESTMENT_SCAM"}},
-
-    {"id": "S13", "name": "Four payees added in the last 24 hours",
-     "changes": {"customer_history": {"payees_added_last_24h": 4}},
-     "expected": {"decision": "WARN", "reason_codes": ["RAPID_PAYEE_ADDITIONS"], "scam_category": "GENERAL_SCAM"}},
-
-    {"id": "S14", "name": "Three soft signals together escalate to HOLD",
-     "changes": {"confirmation_of_payee": {"status": "CLOSE_MATCH"}, "reference": "crypto",
-                 "customer_history": {"payees_added_last_24h": 4}},
-     "expected": {"decision": "HOLD",
-                  "reason_codes": ["MULTIPLE_RISK_SIGNALS", "PAYEE_CLOSE_MATCH", "RAPID_PAYEE_ADDITIONS", "SCAM_KEYWORD_IN_REFERENCE"],
-                  "scam_category": "INVOICE_SCAM"}},
-
-    {"id": "S15", "name": "Mule-list dependency unavailable (switched off), clean payment",
-     "config_changes": {"dependencies": {"mule_list_enabled": false}},
-     "changes": {},
-     "expected": {"decision": "HOLD", "reason_codes": ["MULE_LIST_UNAVAILABLE"], "degraded": true}},
-
-    {"id": "S16", "name": "Confirmation of Payee unavailable",
-     "changes": {"confirmation_of_payee": {"status": "UNAVAILABLE"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["COP_UNAVAILABLE"], "degraded": true}},
-
-    {"id": "S17", "name": "Remote-access signal unavailable",
-     "changes": {"session": {"remote_access": "UNAVAILABLE"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["REMOTE_ACCESS_UNAVAILABLE"], "degraded": true}},
-
-    {"id": "S18", "name": "Customer history unavailable",
-     "changes": {"customer_history": {"status": "UNAVAILABLE", "previously_paid_payee": "__delete__",
-                 "payments_last_90d": "__delete__", "avg_amount_90d": "__delete__", "payees_added_last_24h": "__delete__"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["HISTORY_UNAVAILABLE"], "degraded": true}},
-
-    {"id": "S19", "name": "Mule match and Confirmation of Payee unavailable: dependency listed first",
-     "changes": {"payee": {"bsb": "999-001", "account_number": "11110002"}, "confirmation_of_payee": {"status": "UNAVAILABLE"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["COP_UNAVAILABLE", "MULE_ACCOUNT_MATCH"], "scam_category": "MULE_PAYEE", "degraded": true}},
-
-    {"id": "S20", "name": "High-value payment to a known payee, not unusual for this customer",
-     "changes": {"amount": "30000.00", "customer_history": {"avg_amount_90d": "20000.00"}},
-     "expected": {"decision": "WARN", "reason_codes": ["HIGH_VALUE_PAYMENT"], "scam_category": "GENERAL_SCAM"}},
-
-    {"id": "S21", "name": "Mule list switched off with a soft signal present: still HOLD, never WARN or ALLOW",
-     "config_changes": {"dependencies": {"mule_list_enabled": false}},
-     "changes": {"confirmation_of_payee": {"status": "CLOSE_MATCH"}},
-     "expected": {"decision": "HOLD", "reason_codes": ["MULE_LIST_UNAVAILABLE", "PAYEE_CLOSE_MATCH"], "degraded": true}},
-
-    {"id": "S22", "name": "Unusual pattern with the multiplier tuned up to 10x in config: same payment now ALLOW",
-     "config_changes": {"ruleset_version": "2026.11.1-tuned", "thresholds": {"unusual_payment_multiplier": "10"}},
-     "changes": {"amount": "2400.00"},
-     "expected": {"decision": "ALLOW", "reason_codes": ["NO_RISK_SIGNAL"]}},
-
-    {"id": "R01", "name": "Malformed request: body is not valid JSON",
-     "raw_body": "{\"payment_id\": \"PMT-SCN-0000\", \"amount\": ",
-     "expected": {"decision": "REJECT", "error_fields": ["body"]}},
-
-    {"id": "R02", "name": "Negative payment amount",
-     "changes": {"amount": "-250.00"},
-     "expected": {"decision": "REJECT", "error_fields": ["amount"]}},
-
-    {"id": "R03", "name": "Missing mandatory field: payee",
-     "changes": {"payee": "__delete__"},
-     "expected": {"decision": "REJECT", "error_fields": ["payee"]}},
-
-    {"id": "R04", "name": "Missing mandatory field: customer_id",
-     "changes": {"customer_id": "__delete__"},
-     "expected": {"decision": "REJECT", "error_fields": ["customer_id"]}},
-
-    {"id": "R05", "name": "Zero amount",
-     "changes": {"amount": "0.00"},
-     "expected": {"decision": "REJECT", "error_fields": ["amount"]}},
-
-    {"id": "R06", "name": "Amount with three decimal places",
-     "changes": {"amount": "250.005"},
-     "expected": {"decision": "REJECT", "error_fields": ["amount"]}},
-
-    {"id": "R07", "name": "Amount sent as a JSON number instead of a decimal string",
-     "changes": {"amount": 250.5},
-     "expected": {"decision": "REJECT", "error_fields": ["amount"]}},
-
-    {"id": "R08", "name": "Unsupported currency",
-     "changes": {"currency": "USD"},
-     "expected": {"decision": "REJECT", "error_fields": ["currency"]}},
-
-    {"id": "R09", "name": "Invalid BSB format",
-     "changes": {"payee": {"bsb": "06-2000"}},
-     "expected": {"decision": "REJECT", "error_fields": ["payee.bsb"]}},
-
-    {"id": "R10", "name": "Unknown field in the request",
-     "changes": {"beneficiary_override": "yes"},
-     "expected": {"decision": "REJECT", "error_fields": ["beneficiary_override"]}},
-
-    {"id": "R11", "name": "History marked UNAVAILABLE but history fields supplied",
-     "changes": {"customer_history": {"status": "UNAVAILABLE"}},
-     "expected": {"decision": "REJECT", "error_fields": ["customer_history"]}},
-
-    {"id": "R12", "name": "Body is a JSON array, not an object",
-     "raw_body": "[]",
-     "expected": {"decision": "REJECT", "error_fields": ["body"]}}
+    {
+      "id": "S01",
+      "name": "Clean payment to a known payee",
+      "changes": {},
+      "expected": {
+        "decision": "ALLOW",
+        "reason_codes": [
+          "NO_RISK_SIGNAL"
+        ]
+      }
+    },
+    {
+      "id": "S02",
+      "name": "New payee, small amount",
+      "changes": {
+        "customer_history": {
+          "previously_paid_payee": false
+        }
+      },
+      "expected": {
+        "decision": "ALLOW",
+        "reason_codes": [
+          "NO_RISK_SIGNAL"
+        ]
+      }
+    },
+    {
+      "id": "S03",
+      "name": "New payee with high amount (exactly at the warn threshold)",
+      "changes": {
+        "amount": "1000.00",
+        "customer_history": {
+          "previously_paid_payee": false
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "NEW_PAYEE_HIGH_VALUE"
+        ],
+        "scam_category": "GENERAL_SCAM"
+      }
+    },
+    {
+      "id": "S04",
+      "name": "Payee name close match",
+      "changes": {
+        "confirmation_of_payee": {
+          "status": "CLOSE_MATCH"
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "PAYEE_CLOSE_MATCH"
+        ],
+        "scam_category": "INVOICE_SCAM"
+      }
+    },
+    {
+      "id": "S05",
+      "name": "Payee mismatch (Confirmation of Payee NO_MATCH), low amount",
+      "changes": {
+        "confirmation_of_payee": {
+          "status": "NO_MATCH"
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "PAYEE_MISMATCH"
+        ],
+        "scam_category": "INVOICE_SCAM"
+      }
+    },
+    {
+      "id": "S06",
+      "name": "Payee mismatch at or above the hold amount",
+      "changes": {
+        "amount": "5000.00",
+        "confirmation_of_payee": {
+          "status": "NO_MATCH"
+        },
+        "customer_history": {
+          "avg_amount_90d": "4000.00"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "PAYEE_MISMATCH_HIGH_VALUE"
+        ],
+        "scam_category": "INVOICE_SCAM"
+      }
+    },
+    {
+      "id": "S07",
+      "name": "Remote-access session, payment to a known payee",
+      "changes": {
+        "session": {
+          "remote_access": "DETECTED"
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "REMOTE_ACCESS_DETECTED"
+        ],
+        "scam_category": "REMOTE_ACCESS_SCAM"
+      }
+    },
+    {
+      "id": "S08",
+      "name": "Remote-access session, payment to a new payee",
+      "changes": {
+        "session": {
+          "remote_access": "DETECTED"
+        },
+        "customer_history": {
+          "previously_paid_payee": false
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "REMOTE_ACCESS_NEW_PAYEE"
+        ],
+        "scam_category": "REMOTE_ACCESS_SCAM"
+      }
+    },
+    {
+      "id": "S09",
+      "name": "Mule account match, everything else clean",
+      "changes": {
+        "payee": {
+          "bsb": "999-001",
+          "account_number": "11110001",
+          "account_name": "Quick Cash Pty"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "MULE_ACCOUNT_MATCH"
+        ],
+        "scam_category": "MULE_PAYEE"
+      }
+    },
+    {
+      "id": "S10",
+      "name": "Unusual payment pattern: 8x the customer's 90-day average (configured as SOFT -> WARN)",
+      "changes": {
+        "amount": "2400.00"
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "UNUSUAL_PAYMENT_PATTERN"
+        ],
+        "scam_category": "GENERAL_SCAM"
+      }
+    },
+    {
+      "id": "S11",
+      "name": "New payee at or above the hold amount",
+      "changes": {
+        "amount": "12000.00",
+        "customer_history": {
+          "previously_paid_payee": false,
+          "avg_amount_90d": "9000.00"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "NEW_PAYEE_VERY_HIGH_VALUE"
+        ],
+        "scam_category": "GENERAL_SCAM"
+      }
+    },
+    {
+      "id": "S12",
+      "name": "Investment-scam language in the payment reference",
+      "changes": {
+        "reference": "Bitcoin investment top-up"
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "SCAM_KEYWORD_IN_REFERENCE"
+        ],
+        "scam_category": "INVESTMENT_SCAM"
+      }
+    },
+    {
+      "id": "S13",
+      "name": "Four payees added in the last 24 hours",
+      "changes": {
+        "customer_history": {
+          "payees_added_last_24h": 4
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "RAPID_PAYEE_ADDITIONS"
+        ],
+        "scam_category": "GENERAL_SCAM"
+      }
+    },
+    {
+      "id": "S14",
+      "name": "Three soft signals together escalate to HOLD",
+      "changes": {
+        "confirmation_of_payee": {
+          "status": "CLOSE_MATCH"
+        },
+        "reference": "crypto",
+        "customer_history": {
+          "payees_added_last_24h": 4
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "MULTIPLE_RISK_SIGNALS",
+          "PAYEE_CLOSE_MATCH",
+          "RAPID_PAYEE_ADDITIONS",
+          "SCAM_KEYWORD_IN_REFERENCE"
+        ],
+        "scam_category": "INVOICE_SCAM"
+      }
+    },
+    {
+      "id": "S15",
+      "name": "Mule-list dependency unavailable (switched off), clean payment",
+      "config_changes": {
+        "dependencies": {
+          "mule_list_enabled": false
+        }
+      },
+      "changes": {},
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "MULE_LIST_UNAVAILABLE"
+        ],
+        "degraded": true
+      }
+    },
+    {
+      "id": "S16",
+      "name": "Confirmation of Payee unavailable",
+      "changes": {
+        "confirmation_of_payee": {
+          "status": "UNAVAILABLE"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "COP_UNAVAILABLE"
+        ],
+        "degraded": true
+      }
+    },
+    {
+      "id": "S17",
+      "name": "Remote-access signal unavailable",
+      "changes": {
+        "session": {
+          "remote_access": "UNAVAILABLE"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "REMOTE_ACCESS_UNAVAILABLE"
+        ],
+        "degraded": true
+      }
+    },
+    {
+      "id": "S18",
+      "name": "Customer history unavailable",
+      "changes": {
+        "customer_history": {
+          "status": "UNAVAILABLE",
+          "previously_paid_payee": "__delete__",
+          "payments_last_90d": "__delete__",
+          "avg_amount_90d": "__delete__",
+          "payees_added_last_24h": "__delete__"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "HISTORY_UNAVAILABLE"
+        ],
+        "degraded": true
+      }
+    },
+    {
+      "id": "S19",
+      "name": "Mule match and Confirmation of Payee unavailable: dependency listed first",
+      "changes": {
+        "payee": {
+          "bsb": "999-001",
+          "account_number": "11110002"
+        },
+        "confirmation_of_payee": {
+          "status": "UNAVAILABLE"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "COP_UNAVAILABLE",
+          "MULE_ACCOUNT_MATCH"
+        ],
+        "scam_category": "MULE_PAYEE",
+        "degraded": true
+      }
+    },
+    {
+      "id": "S20",
+      "name": "High-value payment to a known payee, not unusual for this customer",
+      "changes": {
+        "amount": "30000.00",
+        "customer_history": {
+          "avg_amount_90d": "20000.00"
+        }
+      },
+      "expected": {
+        "decision": "WARN",
+        "reason_codes": [
+          "HIGH_VALUE_PAYMENT"
+        ],
+        "scam_category": "GENERAL_SCAM"
+      }
+    },
+    {
+      "id": "S21",
+      "name": "Mule list switched off with a soft signal present: still HOLD, never WARN or ALLOW",
+      "config_changes": {
+        "dependencies": {
+          "mule_list_enabled": false
+        }
+      },
+      "changes": {
+        "confirmation_of_payee": {
+          "status": "CLOSE_MATCH"
+        }
+      },
+      "expected": {
+        "decision": "HOLD",
+        "reason_codes": [
+          "MULE_LIST_UNAVAILABLE",
+          "PAYEE_CLOSE_MATCH"
+        ],
+        "degraded": true
+      }
+    },
+    {
+      "id": "S22",
+      "name": "Unusual pattern with the multiplier tuned up to 10x in config: same payment now ALLOW",
+      "config_changes": {
+        "ruleset_version": "2026.11.1-tuned",
+        "thresholds": {
+          "unusual_payment_multiplier": "10"
+        }
+      },
+      "changes": {
+        "amount": "2400.00"
+      },
+      "expected": {
+        "decision": "ALLOW",
+        "reason_codes": [
+          "NO_RISK_SIGNAL"
+        ]
+      }
+    },
+    {
+      "id": "R01",
+      "name": "Malformed request: body is not valid JSON",
+      "raw_body": "{\"payment_id\": \"PMT-SCN-0000\", \"amount\": ",
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "body"
+        ]
+      }
+    },
+    {
+      "id": "R02",
+      "name": "Negative payment amount",
+      "changes": {
+        "amount": "-250.00"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "amount"
+        ]
+      }
+    },
+    {
+      "id": "R03",
+      "name": "Missing mandatory field: payee",
+      "changes": {
+        "payee": "__delete__"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "payee"
+        ]
+      }
+    },
+    {
+      "id": "R04",
+      "name": "Missing mandatory field: customer_id",
+      "changes": {
+        "customer_id": "__delete__"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "customer_id"
+        ]
+      }
+    },
+    {
+      "id": "R05",
+      "name": "Zero amount",
+      "changes": {
+        "amount": "0.00"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "amount"
+        ]
+      }
+    },
+    {
+      "id": "R06",
+      "name": "Amount with three decimal places",
+      "changes": {
+        "amount": "250.005"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "amount"
+        ]
+      }
+    },
+    {
+      "id": "R07",
+      "name": "Amount sent as a JSON number instead of a decimal string",
+      "changes": {
+        "amount": 250.5
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "amount"
+        ]
+      }
+    },
+    {
+      "id": "R08",
+      "name": "Unsupported currency",
+      "changes": {
+        "currency": "USD"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "currency"
+        ]
+      }
+    },
+    {
+      "id": "R09",
+      "name": "Invalid BSB format",
+      "changes": {
+        "payee": {
+          "bsb": "06-2000"
+        }
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "payee.bsb"
+        ]
+      }
+    },
+    {
+      "id": "R10",
+      "name": "Unknown field in the request",
+      "changes": {
+        "beneficiary_override": "yes"
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "beneficiary_override"
+        ]
+      }
+    },
+    {
+      "id": "R11",
+      "name": "History marked UNAVAILABLE but history fields supplied",
+      "changes": {
+        "customer_history": {
+          "status": "UNAVAILABLE"
+        }
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "customer_history"
+        ]
+      }
+    },
+    {
+      "id": "R12",
+      "name": "Body is a JSON array, not an object",
+      "raw_body": "[]",
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "body"
+        ]
+      }
+    },
+    {
+      "id": "R13",
+      "name": "Mule account written in fullwidth Unicode digits (would bypass the mule list if accepted)",
+      "changes": {
+        "payee": {
+          "bsb": "９９９-００１",
+          "account_number": "１１１１０００１"
+        }
+      },
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "payee.bsb",
+          "payee.account_number"
+        ]
+      }
+    },
+    {
+      "id": "R14",
+      "name": "Duplicate JSON key: two different amounts in one request",
+      "raw_body": "{\"payment_id\": \"PMT-SCN-0000\", \"customer_id\": \"CUST-SCN-01\", \"channel\": \"MOBILE\", \"amount\": \"250.00\", \"amount\": \"99999.00\", \"currency\": \"AUD\", \"payee\": {\"bsb\": \"062-000\", \"account_number\": \"12345678\", \"account_name\": \"Jordan Citizen\"}, \"reference\": \"Rent November\", \"confirmation_of_payee\": {\"status\": \"MATCH\"}, \"session\": {\"remote_access\": \"NOT_DETECTED\"}, \"customer_history\": {\"status\": \"AVAILABLE\", \"previously_paid_payee\": true, \"payments_last_90d\": 12, \"avg_amount_90d\": \"300.00\", \"payees_added_last_24h\": 0}}",
+      "expected": {
+        "decision": "REJECT",
+        "error_fields": [
+          "amount"
+        ]
+      }
+    }
   ]
 }

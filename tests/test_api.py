@@ -6,6 +6,7 @@ validate -> enrich -> score -> decide -> persist -> log -> queue if held.
 from __future__ import annotations
 
 import json
+import types
 import logging
 import sqlite3
 
@@ -240,3 +241,37 @@ def test_database_never_stores_raw_account_name_or_reference(env):
     raw = b"".join(p.read_bytes() for p in env.db.parent.glob(env.db.name + "*"))
     for value in SENSITIVE:
         assert value.encode() not in raw, value
+
+
+# ---------- independent review regressions ----------
+
+def test_json_parser_recursion_error_is_reject_not_hold(env, monkeypatch):
+    """Review finding F2: on Python <= 3.12 deep nesting raises RecursionError, not ValueError."""
+    def deep(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+    # Patch only the payments module's view of json; the test client still needs the real one.
+    monkeypatch.setattr(payments_api, "json", types.SimpleNamespace(loads=deep, dumps=json.dumps))
+    r = env.client.post("/payments/assess", content=b"[[[[]]]]", headers={"Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json()["decision"] == "REJECT"
+    assert env.rows("SELECT * FROM decisions") == []
+
+
+def test_duplicate_keys_are_rejected(env):
+    """Review finding F3: last-key-wins could assess a different amount from the one released."""
+    raw = json.dumps(payment(payment_id=pid(30))).replace('"amount": "250.00"', '"amount": "1.00", "amount": "250.00"')
+    r = env.client.post("/payments/assess", content=raw.encode(), headers={"Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json()["errors"] == [{"field": "amount", "issue": "duplicate key"}]
+
+
+def test_safety_net_hold_emits_a_decision_log_line(env, monkeypatch, caplog):
+    """Review finding F4: every decision, including the safety-net HOLD, emits payment_decision."""
+    caplog.set_level(logging.INFO, logger="app_shield")
+    def broken(*_a, **_k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(payments_api, "assess", broken)
+    env.assess(payment(payment_id=pid(31)), "corr-safety-0001")
+    lines = [json.loads(JsonFormatter().format(r)) for r in caplog.records if r.name.startswith("app_shield")]
+    [decision] = [l for l in lines if l["event"] == "payment_decision"]
+    assert decision["correlation_id"] == "corr-safety-0001"
+    assert decision["decision"] == "HOLD" and decision["reason_codes"] == ["ENGINE_ERROR"]
+    assert decision["persisted"] is False and decision["ruleset_version"] == "2026.11.1"

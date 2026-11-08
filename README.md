@@ -11,7 +11,7 @@ APP Shield sits in the outbound payment path. The payment channel calls it **syn
 
 Authorised push payment (APP) scams happen when a genuine customer is manipulated into sending money themselves. That is why the decision is made at the last moment before release.
 
-Every non-REJECT response carries at least one **reason code**, the **ruleset version** and a **correlation ID**. Every decision is stored for audit, every HOLD is queued for review, and each decision emits one structured JSON log line with no raw account details.
+Every non-REJECT response carries at least one **reason code**, the **ruleset version** and a **correlation ID**. Every decision is stored for audit and every HOLD is queued for review. The one exception: if the store itself fails, the HOLD is returned and logged with `persisted: false` but cannot be queued. Each decision emits one structured JSON log line with no raw account details.
 
 **What this is not:** there is no ML or fraud score, no authentication, no real payment rails or bank integrations, no customer UI, and no cloud deployment. All of these are out of scope (see [evidence/intent.md](evidence/intent.md)). All data is synthetic.
 
@@ -49,7 +49,7 @@ python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ./verify.sh                        # Windows (Git Bash): bash verify.sh
 ```
 
-It runs environment, config and repository-hygiene checks, then **all 159 tests**, including the 34-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 159 tests, 34/34 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
+It runs environment, config and repository-hygiene checks, then **all 169 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 169 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
 
 ## Example
 

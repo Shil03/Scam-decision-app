@@ -25,7 +25,7 @@ from pydantic import (
 SCHEMA_MAX_AMOUNT = Decimal("1000000.00")
 # A sign is allowed here so that negative values reach the gt/ge bound and get the clearer
 # "greater than 0" error instead of a format error.
-_MONEY_RE = re.compile(r"^-?\d{1,9}(\.\d{1,2})?$")
+_MONEY_RE = re.compile(r"^-?[0-9]{1,9}(\.[0-9]{1,2})?$")  # ASCII digits only, never \d (matches any Unicode digit)
 
 
 def _money_string(value: object) -> object:
@@ -95,8 +95,8 @@ class ScamCategory(str, Enum):
 # ---------- request ----------
 
 class Payee(_Strict):
-    bsb: Annotated[str, StringConstraints(pattern=r"^\d{3}-?\d{3}$")]
-    account_number: Annotated[str, StringConstraints(pattern=r"^\d{6,10}$")]
+    bsb: Annotated[str, StringConstraints(pattern=r"^[0-9]{3}-?[0-9]{3}$")]
+    account_number: Annotated[str, StringConstraints(pattern=r"^[0-9]{6,10}$")]
     account_name: Annotated[str, StringConstraints(min_length=1, max_length=140)]
 
 

@@ -68,3 +68,18 @@ def test_amount_errors_are_clear(amount, message):
     with pytest.raises(ValidationError) as err:
         PaymentRequest.model_validate(payment(amount=amount))
     assert message in err.value.errors()[0]["msg"]
+
+
+@pytest.mark.parametrize("changes, field", [
+    ({"payee": {"account_number": "１１１１０００１"}}, "payee.account_number"),   # fullwidth
+    ({"payee": {"account_number": "١١١١٠٠٠١"}}, "payee.account_number"),       # Arabic-Indic
+    ({"payee": {"bsb": "９９９-００１"}}, "payee.bsb"),
+    ({"amount": "٢٥٠.٠٠"}, "amount"),
+    ({"customer_history": {"avg_amount_90d": "３００.００"}}, "customer_history.avg_amount_90d"),
+])
+def test_non_ascii_digits_are_rejected(changes, field):
+    """Review finding F1: \d matched any Unicode digit, so a mule account in fullwidth digits
+    passed validation, missed the mule list and was ALLOWED."""
+    with pytest.raises(ValidationError) as err:
+        PaymentRequest.model_validate(payment(**changes))
+    assert any(".".join(map(str, e["loc"])) == field for e in err.value.errors())

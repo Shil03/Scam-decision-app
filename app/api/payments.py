@@ -32,6 +32,20 @@ def amount_band(amount: Decimal) -> str:
     return next((label for limit, label in _AMOUNT_BANDS if amount < limit), "50k+")
 
 
+class _DuplicateKey(ValueError):
+    pass
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """A repeated key is ambiguous (which amount would the channel release?), so it is malformed."""
+    out: dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey(key if _ID_RE.fullmatch(key) else "body")
+        out[key] = value
+    return out
+
+
 def _state(request: Request) -> AppState:
     return request.app.state.shield
 
@@ -55,8 +69,12 @@ def _process(state: AppState, body: bytes, correlation_id: str) -> JSONResponse:
             version = state.config_store.get().rules.ruleset_version
         except Exception:  # noqa: BLE001
             version = "unknown"
-        decision = fail_closed(correlation_id, version)
-        return JSONResponse(_response(decision, str(uuid.uuid4()), None, utc_now_iso()))
+        decision, decision_id = fail_closed(correlation_id, version), str(uuid.uuid4())
+        log_event(log, "payment_decision", correlation_id=correlation_id, decision_id=decision_id, payment_id=None,
+                  decision=decision.outcome.value, reason_codes=decision.reason_codes, ruleset_version=version,
+                  degraded=True, review_id=None, persisted=False,
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return JSONResponse(_response(decision, decision_id, None, utc_now_iso()))
 
 
 def _assess_and_record(state: AppState, body: bytes, correlation_id: str, started: float) -> JSONResponse:
@@ -64,8 +82,10 @@ def _assess_and_record(state: AppState, body: bytes, correlation_id: str, starte
     if len(body) > limit:
         return _reject(state, correlation_id, [FieldError(field="body", issue=f"must be at most {limit} bytes")], 413)
     try:
-        payload = json.loads(body)
-    except (ValueError, UnicodeDecodeError):
+        payload = json.loads(body, object_pairs_hook=_no_duplicate_keys)
+    except _DuplicateKey as exc:
+        return _reject(state, correlation_id, [FieldError(field=str(exc), issue="duplicate key")], 422)
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return _reject(state, correlation_id, [FieldError(field="body", issue="must be valid JSON")], 422)
 
     loaded = state.config_store.get()
