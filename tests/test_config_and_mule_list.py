@@ -16,7 +16,7 @@ def _bump_mtime(path: Path) -> None:
 
 def test_shipped_config_is_valid(config_file):
     loaded = ConfigStore(config_file).get()
-    assert loaded.rules.rule_set_version
+    assert loaded.rules.ruleset_version
     assert len(loaded.config_hash) == 64
 
 
@@ -24,12 +24,12 @@ def test_threshold_change_is_picked_up_without_restart(config_file):
     store = ConfigStore(config_file)
     data = json.loads(config_file.read_text())
     data["thresholds"]["new_payee_warn_amount"] = "200.00"
-    data["rule_set_version"] = "2026.11.2"
+    data["ruleset_version"] = "2026.11.2"
     write_json(config_file, data)
     _bump_mtime(config_file)
     loaded = store.get()
     assert str(loaded.rules.thresholds.new_payee_warn_amount) == "200.00"
-    assert loaded.rules.rule_set_version == "2026.11.2"
+    assert loaded.rules.ruleset_version == "2026.11.2"
     assert not store.stale
 
 

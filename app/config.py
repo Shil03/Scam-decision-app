@@ -17,7 +17,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints, ValidationError, model_validator
 
-from app.schemas import WarningType
+from app.schemas import ScamCategory
 
 log = logging.getLogger("app_shield.config")
 
@@ -29,9 +29,10 @@ class _Frozen(BaseModel):
 class Thresholds(_Frozen):
     new_payee_warn_amount: Decimal = Field(gt=0)
     new_payee_hold_amount: Decimal = Field(gt=0)
-    cop_no_match_hold_amount: Decimal = Field(gt=0)
-    amount_anomaly_multiplier: Decimal = Field(ge=1)
-    amount_anomaly_min_amount: Decimal = Field(gt=0)
+    high_value_amount: Decimal = Field(gt=0)
+    payee_mismatch_hold_amount: Decimal = Field(gt=0)
+    unusual_payment_multiplier: Decimal = Field(ge=1)
+    unusual_payment_min_amount: Decimal = Field(gt=0)
     rapid_payee_additions_24h: StrictInt = Field(ge=1)
     soft_signal_escalation_count: StrictInt = Field(ge=2)
 
@@ -50,9 +51,9 @@ Keyword = Annotated[str, StringConstraints(min_length=2, max_length=40)]
 
 
 class RuleConfig(_Frozen):
-    rule_set_version: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9.\-]{1,32}$")]
+    ruleset_version: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9.\-]{1,32}$")]
     thresholds: Thresholds
-    reference_keywords: dict[WarningType, list[Keyword]]
+    reference_keywords: dict[ScamCategory, list[Keyword]]
     dependencies: Dependencies
 
 
@@ -116,10 +117,10 @@ class ConfigStore:
             return
         if candidate.config_hash != self._current.config_hash:
             log.info("rule config reloaded: version=%s hash=%s",
-                     candidate.rules.rule_set_version, candidate.config_hash[:12])
+                     candidate.rules.ruleset_version, candidate.config_hash[:12])
         self._current = candidate
         self.last_error = None
 
     def _record_error(self, message: str) -> None:
         self.last_error = message
-        log.error("%s; keeping version=%s", message, self._current.rules.rule_set_version)
+        log.error("%s; keeping version=%s", message, self._current.rules.ruleset_version)

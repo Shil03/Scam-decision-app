@@ -81,7 +81,7 @@ class Category(str, Enum):
     INFO = "INFO"
 
 
-class WarningType(str, Enum):
+class ScamCategory(str, Enum):
     REMOTE_ACCESS_SCAM = "REMOTE_ACCESS_SCAM"
     INVESTMENT_SCAM = "INVESTMENT_SCAM"
     IMPERSONATION_SCAM = "IMPERSONATION_SCAM"
@@ -146,13 +146,16 @@ class Reason(BaseModel):
 
 
 class DecisionResponse(BaseModel):
-    decision_id: str
-    correlation_id: str
-    payment_id: str
+    """Returned for ALLOW, WARN and HOLD. The first four fields are the minimum contract."""
     decision: Outcome
+    reason_codes: list[str] = Field(min_length=1)
+    ruleset_version: str
+    correlation_id: str
+    scam_category: ScamCategory | None
+    requires_customer_confirmation: bool
     reasons: list[Reason] = Field(min_length=1)
-    warning_type: WarningType | None
-    rule_set_version: str
+    decision_id: str
+    payment_id: str
     review_id: str | None
     degraded: bool
     evaluated_at: str

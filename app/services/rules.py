@@ -13,7 +13,7 @@ from typing import Callable
 
 from app.config import Thresholds
 from app.mule_list import MuleResult
-from app.schemas import Category, CopStatus, HistoryStatus, PaymentRequest, RemoteAccess, WarningType
+from app.schemas import Category, CopStatus, HistoryStatus, PaymentRequest, RemoteAccess, ScamCategory
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class RuleHit:
     code: str
     category: Category
     message: str
-    warning_type: WarningType | None = None
+    scam_category: ScamCategory | None = None
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class RuleContext:
     request: PaymentRequest
     mule: MuleResult
     thresholds: Thresholds
-    keywords: dict[WarningType, list[str]]
+    keywords: dict[ScamCategory, list[str]]
 
     @property
     def amount(self) -> Decimal:
@@ -88,22 +88,22 @@ def history_unavailable(c: RuleContext) -> RuleHit | None:
 
 def mule_account_match(c: RuleContext) -> RuleHit | None:
     if c.mule is MuleResult.MATCH:
-        return RuleHit("MULE_ACCOUNT_MATCH", Category.HARD, "Payee account is on the mule account list", WarningType.MULE_PAYEE)
+        return RuleHit("MULE_ACCOUNT_MATCH", Category.HARD, "Payee account is on the mule account list", ScamCategory.MULE_PAYEE)
     return None
 
 
 def remote_access_new_payee(c: RuleContext) -> RuleHit | None:
     if c.remote_access is RemoteAccess.DETECTED and c.new_payee is True:
         return RuleHit("REMOTE_ACCESS_NEW_PAYEE", Category.HARD,
-                       "Remote access active during a payment to a new payee", WarningType.REMOTE_ACCESS_SCAM)
+                       "Remote access active during a payment to a new payee", ScamCategory.REMOTE_ACCESS_SCAM)
     return None
 
 
-def cop_no_match_high_value(c: RuleContext) -> RuleHit | None:
-    limit = c.thresholds.cop_no_match_hold_amount
+def payee_mismatch_high_value(c: RuleContext) -> RuleHit | None:
+    limit = c.thresholds.payee_mismatch_hold_amount
     if c.cop is CopStatus.NO_MATCH and c.amount >= limit:
-        return RuleHit("COP_NO_MATCH_HIGH_VALUE", Category.HARD,
-                       f"Payee name does not match the account and amount is at or above {limit}", WarningType.INVOICE_SCAM)
+        return RuleHit("PAYEE_MISMATCH_HIGH_VALUE", Category.HARD,
+                       f"Payee name does not match the account and amount is at or above {limit}", ScamCategory.INVOICE_SCAM)
     return None
 
 
@@ -111,7 +111,7 @@ def new_payee_very_high_value(c: RuleContext) -> RuleHit | None:
     limit = c.thresholds.new_payee_hold_amount
     if c.new_payee is True and c.amount >= limit:
         return RuleHit("NEW_PAYEE_VERY_HIGH_VALUE", Category.HARD,
-                       f"First payment to this payee at or above {limit}", WarningType.GENERAL_SCAM)
+                       f"First payment to this payee at or above {limit}", ScamCategory.GENERAL_SCAM)
     return None
 
 
@@ -120,19 +120,19 @@ def new_payee_very_high_value(c: RuleContext) -> RuleHit | None:
 def remote_access_detected(c: RuleContext) -> RuleHit | None:
     if c.remote_access is RemoteAccess.DETECTED and c.new_payee is not True:
         return RuleHit("REMOTE_ACCESS_DETECTED", Category.SOFT,
-                       "Remote access active during the payment session", WarningType.REMOTE_ACCESS_SCAM)
+                       "Remote access active during the payment session", ScamCategory.REMOTE_ACCESS_SCAM)
     return None
 
 
-def cop_no_match(c: RuleContext) -> RuleHit | None:
-    if c.cop is CopStatus.NO_MATCH and c.amount < c.thresholds.cop_no_match_hold_amount:
-        return RuleHit("COP_NO_MATCH", Category.SOFT, "Payee name does not match the account", WarningType.INVOICE_SCAM)
+def payee_mismatch(c: RuleContext) -> RuleHit | None:
+    if c.cop is CopStatus.NO_MATCH and c.amount < c.thresholds.payee_mismatch_hold_amount:
+        return RuleHit("PAYEE_MISMATCH", Category.SOFT, "Payee name does not match the account", ScamCategory.INVOICE_SCAM)
     return None
 
 
-def cop_close_match(c: RuleContext) -> RuleHit | None:
+def payee_close_match(c: RuleContext) -> RuleHit | None:
     if c.cop is CopStatus.CLOSE_MATCH:
-        return RuleHit("COP_CLOSE_MATCH", Category.SOFT, "Payee name is a close but not exact match", WarningType.INVOICE_SCAM)
+        return RuleHit("PAYEE_CLOSE_MATCH", Category.SOFT, "Payee name is a close but not exact match", ScamCategory.INVOICE_SCAM)
     return None
 
 
@@ -140,21 +140,28 @@ def new_payee_high_value(c: RuleContext) -> RuleHit | None:
     t = c.thresholds
     if c.new_payee is True and t.new_payee_warn_amount <= c.amount < t.new_payee_hold_amount:
         return RuleHit("NEW_PAYEE_HIGH_VALUE", Category.SOFT,
-                       f"First payment to this payee at or above {t.new_payee_warn_amount}", WarningType.GENERAL_SCAM)
+                       f"First payment to this payee at or above {t.new_payee_warn_amount}", ScamCategory.GENERAL_SCAM)
     return None
 
 
-def amount_anomaly(c: RuleContext) -> RuleHit | None:
+def high_value_payment(c: RuleContext) -> RuleHit | None:
+    limit = c.thresholds.high_value_amount
+    if c.amount >= limit:
+        return RuleHit("HIGH_VALUE_PAYMENT", Category.SOFT, f"Payment amount at or above {limit}", ScamCategory.GENERAL_SCAM)
+    return None
+
+
+def unusual_payment(c: RuleContext) -> RuleHit | None:
     if not c.history_available:
         return None
     t, h = c.thresholds, c.request.customer_history
-    if c.amount < t.amount_anomaly_min_amount:
+    if c.amount < t.unusual_payment_min_amount:
         return None
     no_baseline = h.payments_last_90d == 0 or h.avg_amount_90d == 0
-    if no_baseline or c.amount >= t.amount_anomaly_multiplier * h.avg_amount_90d:
-        return RuleHit("AMOUNT_ANOMALY", Category.SOFT,
-                       f"Amount is unusual for this customer (at least {t.amount_anomaly_multiplier}x the 90-day average)",
-                       WarningType.GENERAL_SCAM)
+    if no_baseline or c.amount >= t.unusual_payment_multiplier * h.avg_amount_90d:
+        return RuleHit("UNUSUAL_PAYMENT_PATTERN", Category.SOFT,
+                       f"Amount is unusual for this customer (at least {t.unusual_payment_multiplier}x the 90-day average)",
+                       ScamCategory.GENERAL_SCAM)
     return None
 
 
@@ -164,7 +171,7 @@ def rapid_payee_additions(c: RuleContext) -> RuleHit | None:
     limit = c.thresholds.rapid_payee_additions_24h
     if c.request.customer_history.payees_added_last_24h >= limit:
         return RuleHit("RAPID_PAYEE_ADDITIONS", Category.SOFT,
-                       f"{limit} or more payees added in the last 24 hours", WarningType.GENERAL_SCAM)
+                       f"{limit} or more payees added in the last 24 hours", ScamCategory.GENERAL_SCAM)
     return None
 
 
@@ -182,6 +189,6 @@ def scam_keyword_in_reference(c: RuleContext) -> RuleHit | None:
 
 
 DEPENDENCY_RULES: tuple[Rule, ...] = (mule_list_unavailable, cop_unavailable, remote_access_unavailable, history_unavailable)
-HARD_RULES: tuple[Rule, ...] = (mule_account_match, remote_access_new_payee, cop_no_match_high_value, new_payee_very_high_value)
-SOFT_RULES: tuple[Rule, ...] = (remote_access_detected, cop_no_match, cop_close_match, new_payee_high_value,
-                                amount_anomaly, rapid_payee_additions, scam_keyword_in_reference)
+HARD_RULES: tuple[Rule, ...] = (mule_account_match, remote_access_new_payee, payee_mismatch_high_value, new_payee_very_high_value)
+SOFT_RULES: tuple[Rule, ...] = (remote_access_detected, payee_mismatch, payee_close_match, new_payee_high_value,
+                                high_value_payment, unusual_payment, rapid_payee_additions, scam_keyword_in_reference)

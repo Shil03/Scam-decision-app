@@ -12,10 +12,10 @@ One FastAPI process with a pure, deterministic rules engine at its centre. Every
       ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ main.py      routes, correlation-ID middleware, error handlers    │
-│   1. VALIDATE   schemas.py (Pydantic, strict)  ── fail ─▶ REJECT  │
+│   1. VALIDATE   services/validator.py (strict) ── fail ─▶ REJECT  │
 │   2. ENRICH     mule_list.py (local stub, can be switched off)    │
-│   3. SCORE      rules.py   pure functions → RuleHit[]              │
-│   4. DECIDE     engine.py  precedence → Decision                   │
+│   3. SCORE      services/rules.py  pure functions → RuleHit[]      │
+│   4. DECIDE     services/decision_engine.py  precedence → Decision │
 │   5. PERSIST    store.py   decisions + review_queue (if HOLD)      │
 │   6. LOG        logging_setup.py  one JSON line, allowlisted       │
 └──────────────────────────────────────────────────────────────────┘
@@ -34,8 +34,10 @@ app/
   schemas.py         request and response models (Pydantic v2, extra="forbid")
   config.py          RuleConfig model + loader that reloads on file mtime change
   mule_list.py       MuleListProvider: JSON stub, enable flag, raises when unavailable
-  rules.py           one small pure function per rule → RuleHit | None
-  engine.py          evaluate(request, mule_result, config) → Decision (no I/O)
+  services/
+    validator.py     raw payload → PaymentRequest or field errors (the REJECT path)
+    rules.py         one small pure function per rule → RuleHit | None
+    decision_engine.py  assess(): validate → mule check → evaluate → Decision; fail closed
   store.py           SQLite access: decisions, review_queue
   privacy.py         payee tokenisation (HMAC), masking
   logging_setup.py   JSON formatter, correlation-ID context var
@@ -115,24 +117,26 @@ Validation (failures REJECT):
 
 ```json
 {
-  "decision_id": "6f1c…",
-  "correlation_id": "c0ffee-…",
-  "payment_id": "PMT-000123",
   "decision": "WARN",
+  "reason_codes": ["NEW_PAYEE_HIGH_VALUE"],
+  "ruleset_version": "2026.11.1",
+  "correlation_id": "c0ffee-…",
+  "scam_category": "GENERAL_SCAM",
+  "requires_customer_confirmation": true,
+  "decision_id": "6f1c…",
+  "payment_id": "PMT-000123",
   "reasons": [
     { "code": "NEW_PAYEE_HIGH_VALUE", "category": "SOFT",
       "message": "First payment to this payee at or above 1000.00" }
   ],
-  "warning_type": "GENERAL_SCAM",
-  "rule_set_version": "2026.11.1",
   "review_id": null,
   "degraded": false,
   "evaluated_at": "2026-11-09T00:10:00Z"
 }
 ```
 
-- `reasons` always has at least one entry. A clean ALLOW returns `NO_RISK_SIGNALS`.
-- `warning_type` is set for WARN and HOLD and comes from the highest-priority hit. It tells the channel which scam warning to show: `REMOTE_ACCESS_SCAM`, `INVESTMENT_SCAM`, `IMPERSONATION_SCAM`, `INVOICE_SCAM`, `MULE_PAYEE` or `GENERAL_SCAM`.
+- `reasons` always has at least one entry. A clean ALLOW returns `NO_RISK_SIGNAL`.
+- `scam_category` is set for WARN and HOLD and comes from the highest-priority hit. It tells the channel which scam warning to show: `REMOTE_ACCESS_SCAM`, `INVESTMENT_SCAM`, `IMPERSONATION_SCAM`, `INVOICE_SCAM`, `MULE_PAYEE` or `GENERAL_SCAM`.
 - `review_id` is set only for HOLD.
 - `degraded` is true when any dependency was unavailable for this decision.
 
@@ -160,8 +164,8 @@ Errors list the field path and message only. Pydantic's `input` echo is stripped
 | `customer_id` TEXT NULL | synthetic, pseudonymous |
 | `decision` TEXT | ALLOW / WARN / HOLD / REJECT |
 | `reason_codes` TEXT | JSON array |
-| `warning_type` TEXT NULL | |
-| `rule_set_version` TEXT NULL | null for REJECT |
+| `scam_category` TEXT NULL | |
+| `ruleset_version` TEXT NULL | null for REJECT |
 | `config_hash` TEXT NULL | SHA-256 of the config file that was applied, so audit can prove the exact thresholds even if someone forgot to bump the version |
 | `amount` TEXT NULL | Decimal as a string |
 | `payee_token` TEXT NULL | HMAC-SHA256(secret, bsb+account), truncated. Lets analysts link payments to the same payee without storing the account |
@@ -194,13 +198,14 @@ The mule list is a JSON file, not a table, because it stands in for an upstream 
 
 ```json
 {
-  "rule_set_version": "2026.11.1",
+  "ruleset_version": "2026.11.1",
   "thresholds": {
     "new_payee_warn_amount": "1000.00",
     "new_payee_hold_amount": "10000.00",
-    "cop_no_match_hold_amount": "5000.00",
-    "amount_anomaly_multiplier": "5",
-    "amount_anomaly_min_amount": "500.00",
+    "high_value_amount": "25000.00",
+    "payee_mismatch_hold_amount": "5000.00",
+    "unusual_payment_multiplier": "5",
+    "unusual_payment_min_amount": "500.00",
     "rapid_payee_additions_24h": 3,
     "soft_signal_escalation_count": 3
   },
@@ -218,7 +223,7 @@ The mule list is a JSON file, not a table, because it stands in for an upstream 
 
 ### Rules
 
-| Code | Category | Fires when | warning_type |
+| Code | Category | Fires when | scam_category |
 |---|---|---|---|
 | `MULE_LIST_UNAVAILABLE` | DEPENDENCY | mule list disabled or failed to load | — |
 | `COP_UNAVAILABLE` | DEPENDENCY | `confirmation_of_payee.status = UNAVAILABLE` | — |
@@ -227,17 +232,18 @@ The mule list is a JSON file, not a table, because it stands in for an upstream 
 | `ENGINE_ERROR` | DEPENDENCY | unexpected exception during enrich, score or persist | — |
 | `MULE_ACCOUNT_MATCH` | HARD | payee (normalised BSB and account) is on the mule list | MULE_PAYEE |
 | `REMOTE_ACCESS_NEW_PAYEE` | HARD | remote access detected **and** payee not previously paid | REMOTE_ACCESS_SCAM |
-| `COP_NO_MATCH_HIGH_VALUE` | HARD | CoP `NO_MATCH` and amount ≥ `cop_no_match_hold_amount` | INVOICE_SCAM |
+| `PAYEE_MISMATCH_HIGH_VALUE` | HARD | CoP `NO_MATCH` and amount ≥ `payee_mismatch_hold_amount` | INVOICE_SCAM |
 | `NEW_PAYEE_VERY_HIGH_VALUE` | HARD | new payee and amount ≥ `new_payee_hold_amount` | GENERAL_SCAM |
 | `MULTIPLE_RISK_SIGNALS` | HARD | soft hits ≥ `soft_signal_escalation_count` | from top soft hit |
 | `REMOTE_ACCESS_DETECTED` | SOFT | remote access detected, payee previously paid | REMOTE_ACCESS_SCAM |
-| `COP_NO_MATCH` | SOFT | CoP `NO_MATCH` below the hold amount | INVOICE_SCAM |
-| `COP_CLOSE_MATCH` | SOFT | CoP `CLOSE_MATCH` | INVOICE_SCAM |
+| `PAYEE_MISMATCH` | SOFT | CoP `NO_MATCH` below the hold amount | INVOICE_SCAM |
+| `PAYEE_CLOSE_MATCH` | SOFT | CoP `CLOSE_MATCH` | INVOICE_SCAM |
 | `NEW_PAYEE_HIGH_VALUE` | SOFT | new payee and amount ≥ `new_payee_warn_amount` | GENERAL_SCAM |
-| `AMOUNT_ANOMALY` | SOFT | amount ≥ `amount_anomaly_min_amount` and ≥ multiplier × `avg_amount_90d` (or no payments in the last 90 days) | GENERAL_SCAM |
+| `HIGH_VALUE_PAYMENT` | SOFT | amount ≥ `high_value_amount`, any payee | GENERAL_SCAM |
+| `UNUSUAL_PAYMENT_PATTERN` | SOFT | amount ≥ `unusual_payment_min_amount` and ≥ multiplier × `avg_amount_90d` (or no payments in the last 90 days) | GENERAL_SCAM |
 | `RAPID_PAYEE_ADDITIONS` | SOFT | `payees_added_last_24h` ≥ threshold | GENERAL_SCAM |
 | `SCAM_KEYWORD_IN_REFERENCE` | SOFT | reference contains a configured keyword (case-insensitive, whole word) | keyword's scam type |
-| `NO_RISK_SIGNALS` | INFO | no other hit | — |
+| `NO_RISK_SIGNAL` | INFO | no other hit | — |
 
 All amount comparisons are `≥` and use `Decimal`. Each boundary has a test.
 
@@ -249,8 +255,8 @@ All amount comparisons are `≥` and use `Decimal`. Each boundary has a test.
 4. **Pick the outcome from the most severe category present:**
    - any DEPENDENCY or HARD hit → **HOLD** (and queue)
    - otherwise any SOFT hit → **WARN**
-   - otherwise → **ALLOW** with `NO_RISK_SIGNALS`
-5. **Order reasons** DEPENDENCY → HARD → SOFT, then by a fixed rule priority. `warning_type` is taken from the first reason that has one.
+   - otherwise → **ALLOW** with `NO_RISK_SIGNAL`
+5. **Order reasons** DEPENDENCY → HARD → SOFT, then by a fixed rule priority. `scam_category` is taken from the first reason that has one.
 6. **Persistence failure → HOLD / ENGINE_ERROR.** The service never returns ALLOW or WARN for a decision it could not record. The structured log line is then the fallback audit trail.
 
 Overall order: **REJECT > HOLD > WARN > ALLOW.**
@@ -261,16 +267,16 @@ Scenarios live in `tests/scenarios/scenarios.json`. Each entry has an id, descri
 
 | ID | Scenario | Expected |
 |---|---|---|
-| S01 | Known payee, normal amount, CoP match, clean session | ALLOW `NO_RISK_SIGNALS` |
+| S01 | Known payee, normal amount, CoP match, clean session | ALLOW `NO_RISK_SIGNAL` |
 | S02 | New payee, small amount, CoP match | ALLOW |
 | S03 | New payee at exactly the warn threshold (boundary) | WARN `NEW_PAYEE_HIGH_VALUE` |
-| S04 | CoP close match | WARN `COP_CLOSE_MATCH`, INVOICE_SCAM |
-| S05 | CoP no match, low amount | WARN `COP_NO_MATCH` |
-| S06 | CoP no match at or above the hold amount | HOLD `COP_NO_MATCH_HIGH_VALUE`, queued |
+| S04 | CoP close match | WARN `PAYEE_CLOSE_MATCH`, INVOICE_SCAM |
+| S05 | CoP no match, low amount | WARN `PAYEE_MISMATCH` |
+| S06 | CoP no match at or above the hold amount | HOLD `PAYEE_MISMATCH_HIGH_VALUE`, queued |
 | S07 | Remote access, known payee | WARN `REMOTE_ACCESS_DETECTED` |
 | S08 | Remote access, new payee | HOLD `REMOTE_ACCESS_NEW_PAYEE` |
 | S09 | Payee on mule list, everything else clean | HOLD `MULE_ACCOUNT_MATCH` |
-| S10 | Amount 8× the 90-day average to a known payee | WARN `AMOUNT_ANOMALY` |
+| S10 | Amount 8× the 90-day average to a known payee | WARN `UNUSUAL_PAYMENT_PATTERN` |
 | S11 | New payee at or above the hold amount | HOLD `NEW_PAYEE_VERY_HIGH_VALUE` |
 | S12 | Reference "bitcoin investment" | WARN `SCAM_KEYWORD_IN_REFERENCE`, INVESTMENT_SCAM |
 | S13 | Four payees added in 24 h | WARN `RAPID_PAYEE_ADDITIONS` |
@@ -284,11 +290,11 @@ Scenarios live in `tests/scenarios/scenarios.json`. Each entry has an id, descri
 
 Cross-cutting tests outside the table:
 
-- **Config change without code (success criterion 6):** S02 returns ALLOW, then the test lowers `new_payee_warn_amount` in the temporary config file and the same request returns WARN with the new `rule_set_version`.
+- **Config change without code (success criterion 6):** S02 returns ALLOW, then the test lowers `new_payee_warn_amount` in the temporary config file and the same request returns WARN with the new `ruleset_version`.
 - **Invalid config edit:** the last good config is kept and `/health` reports degraded.
 - **Engine exception:** a rule is monkeypatched to raise, and the result is HOLD `ENGINE_ERROR`, not a 500.
 - **DB write failure:** the result is HOLD `ENGINE_ERROR`.
-- **Every non-REJECT response:** has ≥ 1 reason and a `rule_set_version`. This is asserted across the whole suite.
+- **Every non-REJECT response:** has ≥ 1 reason and a `ruleset_version`. This is asserted across the whole suite.
 - **Logging:** the captured log line is valid JSON with the correlation ID. The raw account number, account name and reference text never appear in logs or in the DB file.
 - **Correlation ID:** a supplied header is echoed back. A malformed header is replaced with a generated ID.
 
@@ -299,7 +305,7 @@ One line per decision, built from an explicit allowlist of fields rather than by
 ```json
 {"ts":"2026-11-09T00:10:00Z","level":"INFO","event":"payment_decision",
  "correlation_id":"c0ffee-…","decision_id":"6f1c…","payment_id":"PMT-000123",
- "decision":"HOLD","reason_codes":["MULE_ACCOUNT_MATCH"],"rule_set_version":"2026.11.1",
+ "decision":"HOLD","reason_codes":["MULE_ACCOUNT_MATCH"],"ruleset_version":"2026.11.1",
  "config_hash":"9a3e…","payee_token":"b71d…","amount_band":"1k-10k",
  "degraded":false,"latency_ms":3.2}
 ```

@@ -40,6 +40,23 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
   - the remote-access rule firing alongside the remote-access new-payee rule;
   - dependency hits no longer causing HOLD.
 
+### Step 2b: Engine aligned to the owner's specification
+
+**Steering prompt (excerpt):**
+> Implement the APP Shield core decision engine. Create app/services/decision_engine.py, app/services/validator.py, app/config.py, config/rules.json. […] Implement configurable rules for: Confirmation of Payee mismatch, new payee, high payment amount, unusual payment compared with supplied customer history, remote-access session detected, mule account match. Use transparent reason codes. Example reason codes: PAYEE_MISMATCH, NEW_PAYEE_HIGH_VALUE, UNUSUAL_PAYMENT_PATTERN, REMOTE_ACCESS_DETECTED, MULE_ACCOUNT_MATCH, DEPENDENCY_UNAVAILABLE, NO_RISK_SIGNAL. […] Each non-REJECT response must contain decision, reason_codes, ruleset_version, correlation_id. […] Write unit tests for the decision engine. Run tests and explain the decision logic.
+
+**What the agent did:** it compared the prompt with the committed Step 2 engine instead of rebuilding it. It then closed the gaps:
+- moved the engine to `app/services/` and added `validator.py`, whose errors never echo submitted values;
+- added an `assess()` pipeline in which REJECT stops before enrichment;
+- added a configurable `HIGH_VALUE_PAYMENT` rule;
+- added `correlation_id`, `requires_customer_confirmation` and `queue_for_review` to the decision;
+- renamed reason codes and fields to the owner's vocabulary.
+
+**Interventions and review:**
+- **Kept specific dependency codes** (`MULE_LIST_UNAVAILABLE`, `COP_UNAVAILABLE`, …) instead of one generic `DEPENDENCY_UNAVAILABLE`. The prompt listed codes as examples, and a single code would hide which dependency failed. All of them carry category `DEPENDENCY`.
+- **Precedence:** the prompt lists dependencies → hard → soft. The engine evaluates all rules after validation, then applies that precedence. The outcome is identical, but the analyst sees every signal on a HOLD, not just the first.
+- **Tests:** 87 pass (18 new). A second mutation check introduced four bugs: enrichment before validation, errors echoing input, a mule exception crashing the request, and HOLD asking for customer confirmation. A test failed for each one.
+
 ## How generated output is verified
 
 - Every step is reviewed by a human before commit. No commit is made without approval.
