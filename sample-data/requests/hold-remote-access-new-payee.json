@@ -1,0 +1,26 @@
+{
+  "payment_id": "PMT-DEMO-0003",
+  "customer_id": "CUST-SCN-01",
+  "channel": "MOBILE",
+  "amount": "4200.00",
+  "currency": "AUD",
+  "payee": {
+    "bsb": "062-000",
+    "account_number": "12345678",
+    "account_name": "Jordan Citizen"
+  },
+  "reference": "Invoice 4471",
+  "confirmation_of_payee": {
+    "status": "MATCH"
+  },
+  "session": {
+    "remote_access": "DETECTED"
+  },
+  "customer_history": {
+    "status": "AVAILABLE",
+    "previously_paid_payee": false,
+    "payments_last_90d": 12,
+    "avg_amount_90d": "300.00",
+    "payees_added_last_24h": 0
+  }
+}

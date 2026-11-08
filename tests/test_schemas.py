@@ -56,3 +56,15 @@ def test_malformed_requests_fail_validation(changes, field):
         PaymentRequest.model_validate(payment(**changes))
     locations = {".".join(str(p) for p in e["loc"]) for e in err.value.errors()}
     assert any(loc.startswith(field) for loc in locations), locations
+
+
+@pytest.mark.parametrize("amount, message", [
+    ("-50.00", "greater than 0"),        # negative: bound error, not a format error
+    ("0.00", "greater than 0"),
+    ("10.005", "at most 2 decimal places"),
+    ("abc", "decimal string"),
+])
+def test_amount_errors_are_clear(amount, message):
+    with pytest.raises(ValidationError) as err:
+        PaymentRequest.model_validate(payment(amount=amount))
+    assert message in err.value.errors()[0]["msg"]

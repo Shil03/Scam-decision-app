@@ -2,8 +2,36 @@
 
 ## Tools
 
-- **Claude Code** (VS Code extension, Claude Opus 5.5) is the primary implementation agent.
-- The human owner frames the work, approves each gated step and reviews every diff before commit.
+- **Claude Code** (VS Code extension, Claude Opus 5.5) is the primary implementation agent. It wrote the code, tests and documentation, and ran every command.
+- The human owner frames the work, writes the steering prompts, makes the business decisions, and approves each gated step before it is committed and pushed.
+- Commit messages carry no AI co-author line, at the owner's request. AI use is disclosed here instead.
+
+## At a glance
+
+| Step | Owner's steering | Commit (local time, 9 Nov 2026) |
+|---|---|---|
+| 0 | Repository, intent and time log set up by the owner | 09:44 |
+| 1 | Propose architecture, contracts, schemas, entities, precedence, scenarios, risks | 09:58 |
+| 2 | "Start step 2", building the approved design | 10:13 |
+| 2b | Owner's engine specification: `services/` layout, reason-code vocabulary, contract fields | 10:20 |
+| 3 | Owner's API and persistence specification: five endpoints, unique IDs, logging, privacy | 10:32 |
+| 4 | "Act as a Senior Banking QA Automation Engineer": scenario suite, acceptance checks, `verify.sh` | 10:38 |
+| 5 | Documentation against the actual implementation | see `git log` |
+
+Agent working time per step is in [TIMELOG.md](../TIMELOG.md). Between steps, the owner reviewed the summary and the diff, and either approved it or steered with the next prompt.
+
+**Where the human changed the outcome:**
+- **Mule-list outage scope:** hold all payments (D2 in [decisions.md](decisions.md)).
+- **Engine specification:** the owner's Step 2b prompt reshaped the engine: file layout, reason-code names, a configurable high-value rule, and explicit customer-confirmation and review-queue flags.
+- **API specification:** the owner's Step 3 prompt added two endpoints and the unique-ID requirement.
+- **Project hygiene:** repository naming, commit attribution, and keeping the confidential brief out of the repo.
+
+**Where the agent pushed back instead of complying literally:**
+- **Dependency reason codes:** it kept a specific code per dependency instead of one generic `DEPENDENCY_UNAVAILABLE`.
+- **Rule order:** it kept evaluating every rule after validation, which changes the reasons listed, not the outcome.
+- **"Remote access → HOLD":** it labelled S07 (known payee → WARN) separately rather than silently changing an approved rule.
+
+Each was explained to the owner at the time and is recorded in the step log below.
 
 ## How the work was decomposed
 
@@ -29,7 +57,7 @@ The build is split into gated steps: design, then engine, then API and persisten
 **Steering prompt (excerpt):**
 > Yes, let's start with step 2.
 
-The agent built from the approved design §3 and §5. It wrote `app/schemas.py`, `app/config.py`, `app/mule_list.py`, `app/rules.py`, `app/engine.py`, and unit tests whose expected outcomes come from the design's decision table.
+The agent built from the approved design §3 and §5. It wrote `app/schemas.py`, `app/config.py`, `mule_list.py`, `rules.py` and `engine.py` (later moved into `app/services/` in Steps 2b and 3), and unit tests whose expected outcomes come from the design's decision table.
 
 **Interventions and review:**
 - The keyword "fine" was dropped from `IMPERSONATION_SCAM` and replaced with "warrant", because "fine dining" would trigger a scam warning. This was caught while writing the tests.
@@ -98,8 +126,27 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
 - **`verify.sh` was proven to fail.** With the remote-access/new-payee rule disabled, it exited 1 with 4 failing tests. The report showed `S08 | expected HOLD | actual ALLOW | FAIL`. The rule was then restored, and a clean run exited 0.
 - **Actual result:** 155 tests passed, the scenario report shows 34/34 PASS, and `verify.sh` exits 0.
 
+### Step 5: Documentation and evidence pack
+
+**Steering prompt (excerpt):**
+> Prepare the submission documentation for APP Shield using the actual implementation. Create all six evidence files. Also complete README.md. […] The documentation must reflect actual implemented functionality. Do not claim ML, cloud deployment, authentication or payment rail integration exists. Document them as out of scope where appropriate. Include the exact command to run the application and verify.sh.
+
+**What the agent did:**
+- **Design doc.** It re-read `design.md` (written in Step 1, before any code) and corrected the drift: module names, the separate `rejections` table, column lists, log fields, the 34-scenario suite, and the actual build steps.
+- **New evidence files.** It wrote `verify.md`, `operate.md` and `decisions.md`, and the README.
+- **Real examples only.** Every example response and log line in the docs was captured from the running code, not written by hand.
+- **CI.** It added `.github/workflows/verify.yml`, so `verify.sh` runs in CI on Python 3.11–3.13. The 3.11 minimum had only been claimed until then; the local environment is 3.15.
+- **`intent.md` left unchanged**, because it is the source of truth.
+
+**Interventions and review:**
+- **A real usability bug found while capturing examples.** A negative amount produced "must be a decimal string with at most 2 decimal places", which is technically true but not a *clear* error (success criterion 4). The format check now allows a sign, so negatives reach the bound check and say "Input should be greater than 0". A test pins the messages.
+- **Final run:** 159 tests passed, 34/34 scenarios, `verify.sh` exit 0.
+
 ## How generated output is verified
 
 - Every step is reviewed by a human before commit. No commit is made without approval.
 - Behaviour is pinned by the labelled scenario suite. Expected outcomes were written in the design **before** the code, so tests check the agent against an independent specification, not against its own implementation.
 - Privacy is checked by an automated scan of logs and the database for raw account numbers, names and references, rather than by reading code.
+- **Tests were tested.** At each build step the agent deliberately introduced bugs (14 in total) and confirmed a test failed for each one. It also proved `verify.sh` exits 1 on a broken rule. See [verify.md](verify.md).
+- **Examples are real.** Response and log examples in the README and design were captured from the running code.
+- **The human stays accountable.** The owner reviewed each step's summary before approving the commit, and owns every design decision recorded in [decisions.md](decisions.md).

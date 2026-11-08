@@ -23,7 +23,9 @@ from pydantic import (
 )
 
 SCHEMA_MAX_AMOUNT = Decimal("1000000.00")
-_MONEY_RE = re.compile(r"^\d{1,9}(\.\d{1,2})?$")
+# A sign is allowed here so that negative values reach the gt/ge bound and get the clearer
+# "greater than 0" error instead of a format error.
+_MONEY_RE = re.compile(r"^-?\d{1,9}(\.\d{1,2})?$")
 
 
 def _money_string(value: object) -> object:

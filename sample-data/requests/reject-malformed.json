@@ -1,0 +1,21 @@
+{
+  "payment_id": "PMT-DEMO-0004",
+  "customer_id": "CUST-SCN-01",
+  "channel": "MOBILE",
+  "amount": "-50.00",
+  "currency": "AUD",
+  "reference": "Rent November",
+  "confirmation_of_payee": {
+    "status": "MATCH"
+  },
+  "session": {
+    "remote_access": "NOT_DETECTED"
+  },
+  "customer_history": {
+    "status": "AVAILABLE",
+    "previously_paid_payee": true,
+    "payments_last_90d": 12,
+    "avg_amount_90d": "300.00",
+    "payees_added_last_24h": 0
+  }
+}
