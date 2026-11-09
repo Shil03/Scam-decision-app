@@ -160,7 +160,7 @@ The next steps would be: authentication and analyst roles, case resolution, an u
 |---|---|
 | [evidence/intent.md](evidence/intent.md) | Problem, users, assumptions, constraints, out of scope, success criteria (source of truth) |
 | [evidence/design.md](evidence/design.md) | Architecture, data flow, components, API and schemas, data model, rules and precedence, logging, risks, trade-offs, cloud shape |
-| [evidence/agentic-workflow.md](evidence/agentic-workflow.md) | How Claude Code was used: steering prompts, decomposition, human interventions, review |
+| [evidence/agentic-workflow.md](evidence/agentic-workflow.md) | How I directed Claude Code and verified its output: decomposition, steering prompts, decisions, verification |
 | [evidence/verify.md](evidence/verify.md) | Tests and actual results, scenario table, mutation checks, gaps, local vs PR vs pipeline |
 | [evidence/operate.md](evidence/operate.md) | Run, settings and secrets, health, logs, runbooks, failure modes, rollback, local to cloud |
 | [evidence/decisions.md](evidence/decisions.md) | Five decision records and what was deliberately not built |
