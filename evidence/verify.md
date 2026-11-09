@@ -21,7 +21,7 @@ It also writes `reports/scenario-report.md`, with expected vs actual results for
 
 ## Actual result
 
-Final local run after the Step 8 health fix (Windows 11, Git Bash, Python 3.15.2):
+Final local run after the Step 9 usability fixes (Windows 11, Git Bash, Python 3.15.2):
 
 ```
 == 1/6 Python version (3.11+ required)                  3.15.2
@@ -29,7 +29,7 @@ Final local run after the Step 8 health fix (Windows 11, Git Bash, Python 3.15.2
 == 3/6 Byte-compile application code                    ok
 == 4/6 Shipped rule config and mule list stub are valid ruleset 2026.11.1 | config sha256 0afe906337af | mule list up
 == 5/6 Repository hygiene                               ok
-== 6/6 Tests                                            182 passed in 13.35s
+== 6/6 Tests                                            183 passed in 13.45s
 Scenario report: 36/36 scenarios passed.
 VERIFY PASSED            (exit code 0)
 ```
@@ -38,7 +38,7 @@ VERIFY PASSED            (exit code 0)
 
 **CI:** `.github/workflows/verify.yml` runs `verify.sh` on every push and PR, on Python 3.11, 3.12 and 3.13 (Ubuntu), and uploads the scenario report as an artifact. Results are on the repository's **Actions** tab. The first CI run (Step 5 commit) passed on all three versions with 159 tests and 34/34 scenarios each.
 
-## Test inventory (182)
+## Test inventory (183)
 
 | File | Tests | What it proves |
 |---|---|---|
@@ -46,7 +46,7 @@ VERIFY PASSED            (exit code 0)
 | `tests/test_config_and_mule_list.py` | 14 | Threshold change picked up without restart. Invalid edits keep the last good config and mark it stale. No valid config means no start. Mule stub match / no-match / disabled / missing / corrupt / below minimum size |
 | `tests/test_engine.py` | 30 | Every rule and its `≥` boundary, precedence, escalation, reason order, `scam_category`, degraded flag, config-driven thresholds, exception gives HOLD |
 | `tests/test_pipeline.py` | 18 | `assess()`: REJECT never reaches the mule list or the rules. Errors never echo submitted values. Contract fields always present. WARN asks for confirmation and HOLD is queued. Mule failure gives HOLD |
-| `tests/test_api.py` | 36 | Full HTTP workflow on a real SQLite file: persistence, review queue and detail, 404s, REJECT 422/413, replay and 409s, correlation IDs, mule switch-off and `/health`, config hot reload and `/config/rules`, DB write failure gives HOLD, exception gives HOLD (not 500), log lines and **raw DB bytes** free of sensitive values. Review regressions: parser `RecursionError` gives REJECT, duplicate keys give REJECT, safety-net HOLD logs a decision. Assessment regressions: race loser replays or gets 409; 12 concurrent identical requests get one decision; empty mule list gives HOLD and degraded; minimum size configurable; `/health` is 503 for each of 5 degraded causes while `/health/live` stays 200 |
+| `tests/test_api.py` | 37 | Full HTTP workflow on a real SQLite file: persistence, review queue and detail, 404s, REJECT 422/413, replay and 409s, correlation IDs, mule switch-off and `/health`, config hot reload and `/config/rules`, DB write failure gives HOLD, exception gives HOLD (not 500), log lines and **raw DB bytes** free of sensitive values. Review regressions: parser `RecursionError` gives REJECT, duplicate keys give REJECT, safety-net HOLD logs a decision. Assessment regressions: race loser replays or gets 409; 12 concurrent identical requests get one decision; empty mule list gives HOLD and degraded; minimum size configurable; `/health` is 503 for each of 5 degraded causes while `/health/live` stays 200. `/docs` advertises the request body, and each documented example returns the decision its label claims |
 | `tests/test_scenarios.py` | 36 | The labelled scenario suite (below) |
 | `tests/test_acceptance.py` | 12 | The owner's acceptance checks, swept across the whole suite (below) |
 

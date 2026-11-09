@@ -18,8 +18,8 @@ Every non-REJECT response carries at least one **reason code**, the **ruleset ve
 ## Prerequisites
 
 - **Python 3.11 or newer.** Developed on 3.15; CI runs 3.11, 3.12 and 3.13.
-- **Bash** for `verify.sh`. On Windows, use Git Bash.
-- **curl**, optional, for the examples.
+- **Bash** for `verify.sh`. On Windows it comes with [Git for Windows](https://git-scm.com/download/win), but PowerShell can't see it by name; see [Run the checks](#run-the-checks).
+- **curl**, optional, for the examples. On Windows PowerShell type `curl.exe`, because plain `curl` is a different command there.
 
 No API keys, credentials, Docker or external services are needed.
 
@@ -39,26 +39,41 @@ pip install -r requirements.txt
 python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-- **API docs:** http://127.0.0.1:8000/docs
-- **Health:** http://127.0.0.1:8000/health
+- **API docs and a test page:** http://127.0.0.1:8000/docs. Open `POST /payments/assess`, click **Try it out**, choose one of the four samples (ALLOW / WARN / HOLD / REJECT) from **Examples**, and click **Execute**. To assess a sample again, change its `payment_id`, otherwise the stored decision is replayed.
+- **Health:** http://127.0.0.1:8000/health (HTTP 503 while degraded) and http://127.0.0.1:8000/health/live
+- **Port 8000 already in use?** If you see `[Errno 10048]` or "address already in use", add `--port 8001` (or any free port) and use that port in the URLs.
 - **Data:** decisions are written to `data/app_shield.db`, which is created automatically. Delete it to start fresh.
 
 ## Run the checks
 
 ```bash
-./verify.sh                        # Windows (Git Bash): bash verify.sh
+./verify.sh
 ```
 
-It runs environment, config and repository-hygiene checks, then **all 182 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 182 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
+On **Windows**, either open **Git Bash** in the project folder and run `./verify.sh`, or run this from **PowerShell** (typing just `bash` fails there, because Git doesn't add it to PowerShell's PATH):
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" verify.sh
+```
+
+You don't need to activate the virtual environment first: `verify.sh` finds `.venv` itself.
+
+It runs environment, config and repository-hygiene checks, then **all 183 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 183 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
 
 ## Example
 
-Four sample requests are in [sample-data/requests/](sample-data/requests/). With the service running:
+Four sample requests are in [sample-data/requests/](sample-data/requests/). The quickest way to try them is the `/docs` page (see above). From a terminal, with the service running:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/payments/assess \
   -H "Content-Type: application/json" -H "X-Correlation-ID: demo-hold-0001" \
   --data @sample-data/requests/hold-remote-access-new-payee.json
+```
+
+Windows PowerShell (one line):
+
+```powershell
+curl.exe -s -X POST http://127.0.0.1:8000/payments/assess -H "Content-Type: application/json" --data-binary "@sample-data/requests/hold-remote-access-new-payee.json"
 ```
 
 That request is a $4,200 payment to a **new payee** while a **remote-access session** is active, which is a classic remote-access scam pattern. Actual response:

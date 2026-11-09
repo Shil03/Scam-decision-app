@@ -14,6 +14,7 @@ from fastapi import APIRouter, Path, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from app.api.openapi_docs import assess_request_body
 from app.logging_setup import log_event, utc_now_iso
 from app.schemas import DecisionResponse, FieldError, Outcome, Reason, RejectResponse
 from app.services.decision_engine import Decision, assess, fail_closed
@@ -53,7 +54,8 @@ def _state(request: Request) -> AppState:
 # ---------- POST /payments/assess ----------
 
 @router.post("/payments/assess", tags=["payments"],
-             summary="Assess an outbound payment before release: ALLOW, WARN, HOLD or REJECT")
+             summary="Assess an outbound payment before release: ALLOW, WARN, HOLD or REJECT",
+             openapi_extra=assess_request_body())
 async def assess_payment(request: Request) -> JSONResponse:
     body = await request.body()
     return await run_in_threadpool(_process, _state(request), body, request.state.correlation_id)

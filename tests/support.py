@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import os
 import shutil
 import sqlite3
@@ -38,7 +39,8 @@ class ApiEnv:
         os.utime(self.config, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
 
     def rows(self, sql: str, params: tuple = ()) -> list[dict]:
-        with sqlite3.connect(self.db) as conn:
+        # contextlib.closing: "with sqlite3.connect()" alone commits but never closes the connection.
+        with closing(sqlite3.connect(self.db)) as conn:
             conn.row_factory = sqlite3.Row
             return [dict(r) for r in conn.execute(sql, params)]
 

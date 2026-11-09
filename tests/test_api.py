@@ -368,3 +368,22 @@ def test_health_returns_503_while_degraded_and_liveness_stays_200(env, monkeypat
         assert env.assess(payment(payment_id=pid(50))).json()["decision"] == "HOLD"
     elif cause == "config_stale":
         assert env.assess(payment(payment_id=pid(50))).json()["decision"] == "ALLOW"
+
+
+# ---------- /docs usability: the assess request body is documented and its examples are true ----------
+
+def test_docs_advertise_the_assess_request_body_with_working_examples(env):
+    """'Try it out' in /docs had no body box (the endpoint reads the raw body), so it sent an empty
+    request and got REJECT. The body is now documented; each example must do what its label says."""
+    op = env.client.get("/openapi.json").json()["paths"]["/payments/assess"]["post"]
+    media = op["requestBody"]["content"]["application/json"]
+    assert op["requestBody"]["required"] is True
+    schema = media["schema"]
+    assert {"payment_id", "amount", "payee", "confirmation_of_payee"} <= set(schema["properties"])
+    assert schema["properties"]["amount"]["type"] == "string"          # money is never a JSON number
+    assert "$ref" not in json.dumps(schema)                            # renders in Swagger UI
+    assert len(media["examples"]) == 4
+    for name, example in media["examples"].items():
+        expected = example["summary"].split(":")[0]                    # "ALLOW: ...", "HOLD: ..."
+        r = env.client.post("/payments/assess", json=example["value"])
+        assert r.json()["decision"] == expected, (name, r.json())

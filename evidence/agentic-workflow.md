@@ -20,7 +20,8 @@
 | 6 | Independent senior engineering review; fix critical defects only | 10:58 |
 | 7 | "Act as a Senior Software Engineering Technical Assessor" (read-only), then "fix D1 and D2" | 11:16 |
 | — | Re-assessment and score; plain-language rewrite of `design.md` | 11:33 |
-| 8 | "Yes please fix" (D3: health status code) | see `git log` |
+| 8 | "Yes please fix" (D3: health status code) | 11:42 |
+| 9 | Owner tested it by hand; fix what they hit | see `git log` |
 
 Agent working time per step is in [TIMELOG.md](../TIMELOG.md). Between steps, the owner reviewed the summary and the diff, and either approved it or steered with the next prompt.
 
@@ -213,6 +214,27 @@ and then:
 - **A live server check:** outage → `/health` 503, `/health/live` 200, payment HOLD; recovery → 200.
 - **The agent made a mistake outside the project.** One tool call wrote a stray file, `C:\AKASHP~1\placeholder.txt`, with no purpose. The agent noticed immediately, checked the contents, and deleted the file. Removing the empty folder that the call had also created was blocked by Claude Code's safety check. The agent left it for the owner and reported it, rather than working around the check.
 - **Result:** 182 tests passed, 36/36 scenarios, `verify.sh` exit 0.
+
+### Step 9: Usability fixes found by the owner testing it by hand
+
+**What happened:** the owner followed the agent's own test checklist and hit three problems the automated suite could not catch:
+1. **`bash verify.sh` failed in PowerShell** ("bash is not recognized"). Git for Windows installs bash, but doesn't put it on PowerShell's PATH.
+2. **Port 8000 was taken** by an unrelated Python process started hours earlier, so uvicorn couldn't bind. The agent identified the process read-only and did not stop it.
+3. **"Try it out" in `/docs` returned REJECT.** The cause was the agent's own design: the endpoint reads the raw body (to turn bad JSON into a clean REJECT), so FastAPI never documented a body, and Swagger UI sent an empty request. The agent's checklist had told the owner to paste JSON into `/docs`, which was not possible.
+
+**Steering prompt:**
+> yes please
+
+**What the agent did:**
+- **Documented the request body for `/docs`.** It added `app/api/openapi_docs.py` with the full schema and the four sample payments as selectable examples. The amount fields are documented as decimal strings, so `/docs` doesn't suggest JSON numbers. Validation behaviour is unchanged.
+- **README and `operate.md`:** the exact PowerShell command for `verify.sh`, `curl.exe` examples, and what to do when port 8000 is busy.
+
+**Interventions and review:**
+- **The new test also proves the docs are true.** It posts each `/docs` example and checks the decision matches the example's label. It fails on the old code (`KeyError: 'requestBody'`).
+- **Live check:** `/docs` loads, and Execute on each example gives ALLOW / WARN / HOLD / REJECT as labelled. The agent can't click a browser, so the owner's own `/docs` test is the final check.
+- **Showing every warning (`-W default`) exposed a leak in the agent's test helper.** `with sqlite3.connect()` commits but never closes the connection. It was fixed with `contextlib.closing`, taking the count from several warnings to 0. The app code was already closing its connections.
+- **Lesson recorded:** the hand test found what 182 automated tests could not. Test instructions are part of the product and need checking too.
+- **Result:** 183 tests passed, 36/36 scenarios, `verify.sh` exit 0.
 
 ## How generated output is verified
 

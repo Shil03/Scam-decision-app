@@ -19,6 +19,7 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StringConstraints,
+    WithJsonSchema,
     model_validator,
 )
 
@@ -35,8 +36,13 @@ def _money_string(value: object) -> object:
 
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9-]+$")]
-PositiveMoney = Annotated[Decimal, BeforeValidator(_money_string), Field(gt=0, le=SCHEMA_MAX_AMOUNT)]
-NonNegativeMoney = Annotated[Decimal, BeforeValidator(_money_string), Field(ge=0, le=SCHEMA_MAX_AMOUNT)]
+# WithJsonSchema only changes what /docs shows: a decimal string, never a JSON number.
+_MONEY_DOC = {"type": "string", "pattern": r"^[0-9]{1,9}(\.[0-9]{1,2})?$", "examples": ["250.00"],
+              "description": 'Decimal as a string, e.g. "250.00". JSON numbers are rejected.'}
+PositiveMoney = Annotated[Decimal, BeforeValidator(_money_string), Field(gt=0, le=SCHEMA_MAX_AMOUNT),
+                          WithJsonSchema(_MONEY_DOC)]
+NonNegativeMoney = Annotated[Decimal, BeforeValidator(_money_string), Field(ge=0, le=SCHEMA_MAX_AMOUNT),
+                             WithJsonSchema(_MONEY_DOC)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0, le=100_000)]
 
 

@@ -11,7 +11,9 @@ pip install -r requirements.txt
 python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-- **Interactive API docs:** http://127.0.0.1:8000/docs
+- **Interactive API docs:** http://127.0.0.1:8000/docs. `POST /payments/assess` → **Try it out** → pick an example → **Execute**.
+- **Port busy** (`[Errno 10048]` / "address already in use"): use `--port 8001`.
+- **Windows:** run checks with `& "C:\Program Files\Git\bin\bash.exe" verify.sh` from PowerShell (or `./verify.sh` in Git Bash), and use `curl.exe`, not `curl`.
 - **Data:** decisions are written to `data/app_shield.db`, which is created on first start and ignored by git. Delete the file to reset.
 - **Stop:** Ctrl+C. All state is in the SQLite file and the two JSON files.
 
