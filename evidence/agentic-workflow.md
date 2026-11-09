@@ -28,7 +28,6 @@ I used gated steps. A step started only after I had reviewed and approved the pr
 
 > "Perform an independent senior engineering review… Inspect for decision precedence defects, fail-open paths, missing validation, race conditions… Fix critical defects only. Do not introduce new features."
 
-> "Act as a Senior Software Engineering Technical Assessor… Do not modify the code. Do not fabricate test results. Do not assume a feature works because it is documented."
 
 ## How I verified the AI's output
 
