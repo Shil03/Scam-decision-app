@@ -60,6 +60,6 @@ Short records of the decisions that shaped the slice, and what was deliberately 
 | Mule detection | Out of scope (intent); the mule list is a synthetic stub |
 | Customer UI, warning content | Out of scope (intent); the service returns `scam_category` for the channel to use |
 | Case management (resolving a review) | Out of scope beyond a basic queue endpoint; status stays `PENDING` |
-| Cloud deployment, container image | Out of scope (intent); the cloud shape is described in [design.md](design.md) §10 and [operate.md](operate.md) |
+| Cloud deployment, container image | Out of scope (intent); the cloud shape is described in [design.md](design.md) §12 and [operate.md](operate.md) |
 | Load or performance testing | Not attempted in the timebox; `latency_ms` is recorded per decision |
 | Lint and type-check gates | Tools not installed in the timebox; listed as a PR-stage addition |

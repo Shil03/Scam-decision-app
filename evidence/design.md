@@ -1,143 +1,165 @@
-# Design
+# How APP Shield works
 
-[intent.md](intent.md) is the source of truth. This document describes the slice **as implemented**. It was first written in Step 1 and corrected in Step 5 to match the code. Anything not built is marked as such.
+This document explains how APP Shield is built and why, in plain language. It describes what is **actually implemented**. Anything that is only proposed is clearly marked "not built". The requirements it meets are in [intent.md](intent.md), and technical terms are explained in the [glossary](#glossary) at the end.
 
-## 1. Architecture and data flow
+---
 
-One FastAPI process with a deterministic rules engine at its centre. Code that does I/O (config file, mule list, SQLite, logs) sits at the edges, so the rules can be tested as plain functions.
+## 1. The big picture
 
-```
- Payment channel (mobile or web banking backend; out of scope)
-      │  POST /payments/assess        X-Correlation-ID (optional)
-      ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│ main.py           correlation-ID middleware (accept a valid header or make a UUID)  │
-│ api/payments.py   body ≤ 16 KB → JSON parse ──── fail ───────────────▶ REJECT 413/422 │
-│   1. VALIDATE  services/validator.py   strict schema ── fail ───────▶ REJECT 422     │
-│   2. ENRICH    services/enrichment.py → services/mule_service.py (switchable stub)   │
-│   3. SCORE     services/rules.py       16 pure rules → RuleHit[]                     │
-│   4. DECIDE    services/decision_engine.py   precedence → ALLOW | WARN | HOLD        │
-│   5. PERSIST   services/audit_service.py → database.py   decision (+ queue row if HOLD)│
-│   6. LOG       logging_setup.py   one JSON line, fields passed explicitly            │
-│ any exception in 2–5 ───────────────────────────────────────────▶ HOLD ENGINE_ERROR │
-└────────────────────────────────────────────────────────────────────────────┘
-      ▲                           ▲                              ▲
- config/rules.json        sample-data/mule_accounts.json     data/app_shield.db
- (reloaded on change)     (synthetic stub)                   (SQLite, WAL)
-```
+**The problem.** In an authorised push payment (APP) scam, a criminal talks a real customer into sending money themselves. Typical stories are "I'm from the bank, move your money to this safe account" and "this is your new invoice account". Normal fraud checks miss it, because the customer, the device and the login are all genuine. Once the money has gone, it is very hard to get back. The best moment to step in is **just before the payment is released**.
 
-### Component boundaries
+**What APP Shield does.** Just before releasing a payment, the bank's payment channel (the mobile or web banking backend) asks APP Shield: *"Is this payment safe to send?"* APP Shield checks it against a set of clear rules and answers with one of four decisions:
 
-| Module | Responsibility | I/O? |
+| Decision | What it means | What the payment channel does |
 |---|---|---|
-| `app/main.py` | App factory (`create_app`), correlation-ID middleware, router wiring | no |
-| `app/state.py` | Builds the long-lived objects once per app: config store, mule service, database, audit service | no |
-| `app/api/payments.py` | `POST /payments/assess`, review-queue endpoints, the fail-closed safety net, the log line | via services |
-| `app/api/operations.py` | `GET /health`, `GET /config/rules` | via services |
-| `app/schemas.py` | Request and response models (Pydantic v2, `extra="forbid"`, money as decimal strings) | no |
-| `app/config.py` | `RuleConfig` model, `ConfigStore` (reload on change, last-known-good), `Settings` from environment | reads file |
-| `app/services/validator.py` | Raw payload → `PaymentRequest`, or field errors that never echo submitted values | no |
-| `app/services/enrichment.py` | Fetches the service's own signals (mule list). Failures become `UNAVAILABLE`, never exceptions | via mule service |
-| `app/services/mule_service.py` | Local stub of the upstream mule list; reloads on change; reports `up` / `disabled` / `down` | reads file |
-| `app/services/rules.py` | One small pure function per rule | no |
-| `app/services/decision_engine.py` | `assess()` pipeline and `evaluate()` precedence; `safe_evaluate()` fails closed | no |
-| `app/services/audit_service.py` | Payee tokenising and masking, duplicate checks, transactional writes, review-queue reads | SQLite |
-| `app/database.py`, `app/models/entities.py` | Schema, connections, record types | SQLite |
-| `app/logging_setup.py` | JSON formatter, correlation-ID context, UTC timestamps | stdout |
+| **ALLOW** | Nothing looks wrong | Sends the payment |
+| **WARN** | Something looks a bit unusual | Shows the customer a scam warning that fits the situation, and sends the payment only if the customer confirms |
+| **HOLD** | Something looks seriously wrong, **or** APP Shield can't check the payment properly | Does not send it. The payment goes into a queue for a fraud analyst to review |
+| **REJECT** | The request itself is broken or invalid | Nothing is checked. The channel must fix the request |
 
-The service **does not compute** Confirmation of Payee, remote-access flags or customer history. The channel supplies them, as the intent assumes. The only signal the service fetches itself is the mule-list lookup.
+Every answer except REJECT explains itself with **reason codes** (for example `PAYEE_MISMATCH`). It also names the **rule set version** used, so anyone can later see exactly why a decision was made.
 
-## 2. API contracts
+**The one rule above all others:** when in doubt, hold. If anything APP Shield needs is unavailable or broken, the answer is HOLD, never ALLOW. This is called *failing closed*.
 
-| Method | Path | Purpose | Responses |
-|---|---|---|---|
-| POST | `/payments/assess` | Assess one payment before release | 200 ALLOW / WARN / HOLD · 422 REJECT (invalid) · 409 REJECT (duplicate ID) · 413 REJECT (body > 16 KB) |
-| GET | `/review-queue` | Held payments awaiting review, most urgent first (`?limit=1..200`, default 50) | 200 · 503 if the store is down |
-| GET | `/review-queue/{payment_id}` | One held payment: reasons, signals used, ruleset version, config hash | 200 · 404 if not held |
-| GET | `/health` | Dependency state: mule list, database, config | 200 with `status` `ok` or `degraded` |
-| GET | `/config/rules` | Active thresholds, keywords, ruleset version, config hash (no secrets) | 200 |
+---
 
-OpenAPI documentation is served at `/docs` while the app runs.
+## 2. The journey of one payment
 
-- **ALLOW, WARN and HOLD return 200.** They are decisions, not errors; the channel acts on `decision`.
-- **REJECT uses the same envelope** (`decision: "REJECT"`), so the channel parses one shape. Nothing is enriched or scored; tests count the calls to prove it.
-- **Correlation ID.** A valid `X-Correlation-ID` (8–64 chars, `[A-Za-z0-9-]`) is used; otherwise a UUID4 is generated. It is echoed in the response header and body, and stored in the log line and the database row.
-- **Unique IDs and retries.** `payment_id` and `correlation_id` are both `UNIQUE` in `decisions`.
-  - **Same `payment_id`, same payload:** the stored response is replayed with `Idempotent-Replay: true`, so a channel retrying after a timeout gets the same answer.
-  - **Same `payment_id`, different payload:** 409 REJECT.
-  - **Correlation ID reused for another payment:** 409 REJECT.
-  - **Concurrent duplicates:** a request that loses the race to insert (UNIQUE constraint) re-runs the same check, so it gets the winner's stored decision (or a 409), never a second, different decision.
-- **Channel contract (documented, not enforced):** a timeout, connection error or 5xx must be treated as HOLD by the channel.
+This is what happens, in order, when the payment channel sends a payment to `POST /payments/assess`.
 
-## 3. Request and response schemas
+```
+  Payment channel
+       │  "Is this payment safe?"
+       ▼
+  ① Give the request a tracking number (correlation ID)
+  ② Basic checks: is it under 16 KB? Is it valid JSON? No repeated fields?  ── no ──► REJECT
+  ③ Detailed checks: every field present and sensible?                     ── no ──► REJECT
+  ④ Look up the payee on the mule account list
+  ⑤ Run the scam rules
+  ⑥ Decide: HOLD, WARN or ALLOW
+  ⑦ Save the decision (and put a HOLD in the review queue)
+  ⑧ Write one log line
+       │
+       ▼
+  Answer back to the channel
 
-### Request
-
-```json
-{
-  "payment_id": "PMT-DEMO-0003",
-  "customer_id": "CUST-SCN-01",
-  "channel": "MOBILE",
-  "amount": "4200.00",
-  "currency": "AUD",
-  "payee": {"bsb": "062-000", "account_number": "12345678", "account_name": "Jordan Citizen"},
-  "reference": "Invoice 4471",
-  "confirmation_of_payee": {"status": "MATCH"},
-  "session": {"remote_access": "DETECTED"},
-  "customer_history": {
-    "status": "AVAILABLE", "previously_paid_payee": false, "payments_last_90d": 12,
-    "avg_amount_90d": "300.00", "payees_added_last_24h": 0
-  }
-}
+  Anything unexpected going wrong in steps ④ to ⑦  ──►  HOLD (never ALLOW, never a crash)
 ```
 
-| Field | Rule (a failure means REJECT) |
-|---|---|
-| `payment_id`, `customer_id` | required, 1–64 chars, `[A-Za-z0-9-]` |
-| `channel` | `MOBILE` or `WEB` |
-| `amount` | **JSON string**, parsed to `Decimal`; > 0, at most 2 dp, ≤ 1,000,000. A JSON number is rejected so floats never touch money |
-| `currency` | `AUD` only |
-| `payee.bsb` / `payee.account_number` / `payee.account_name` | `^[0-9]{3}-?[0-9]{3}$` / `^[0-9]{6,10}$` (ASCII digits only) / 1–140 chars |
-| `reference` | optional, ≤ 140 chars |
-| `confirmation_of_payee.status` | `MATCH`, `CLOSE_MATCH`, `NO_MATCH`, `UNAVAILABLE` |
-| `session.remote_access` | `DETECTED`, `NOT_DETECTED`, `UNAVAILABLE` |
-| `customer_history` | `status: AVAILABLE` with all four fields (strict bool/int, non-negative), or `status: UNAVAILABLE` with none |
-| anything else | unknown fields and duplicate JSON keys are rejected |
+**① Tracking number.** Each request gets a correlation ID. If the channel sends a valid one, it is used; otherwise APP Shield creates one. The same ID appears in the answer, the database and the log, so one payment can be traced end to end.
 
-**Missing vs unavailable.** A missing block is a malformed request: REJECT. A block sent as `UNAVAILABLE` means the upstream dependency failed: HOLD. This separates "the caller sent something wrong" from "a dependency is down".
+**② and ③ Checking the request.** Before any risk checking happens, the request must be well formed. Examples of what gets rejected:
+- the amount is negative, zero, has 3 decimal places, or is sent as a number instead of text like `"250.00"`;
+- the currency is not AUD;
+- the BSB or account number is in the wrong format, **including look-alike digits from other alphabets**, such as fullwidth `１２３`;
+- a required section is missing;
+- there is an unknown extra field, or the same field appears twice.
 
-### Response (ALLOW / WARN / HOLD)
+A rejected request is **never** risk-checked, and the error message names the field but never repeats the value that was sent.
 
-`decision`, `reason_codes` (≥ 1), `ruleset_version` and `correlation_id` form the minimum contract. The response also carries:
-- `scam_category`: which warning to show;
-- `requires_customer_confirmation`: true only for WARN;
-- `reasons[]`: code, category and message;
-- `decision_id`, `payment_id`, `review_id` (HOLD only), `degraded` and `evaluated_at` (UTC).
+**④ Mule list check.** A *mule account* is a bank account used to receive and move stolen money. APP Shield checks the payee against a list of known mule accounts. In this project the list is a small local file of made-up accounts, standing in for a real bank service. It can be switched off to simulate an outage.
 
-The README has real examples.
+**⑤ and ⑥ Rules and decision.** See section 4.
 
-### Response (REJECT)
+**⑦ Saving.** The decision is saved to a database (SQLite). A HOLD also gets a row in the review queue, saved at the same moment, so a HOLD can never be saved without its queue entry.
 
-`{"decision": "REJECT", "correlation_id": "...", "errors": [{"field": "amount", "issue": "Input should be greater than 0"}]}`. Errors give the field path and message only, never the submitted value.
+**⑧ Logging.** One structured log line per decision, without sensitive details (see section 7).
 
-## 4. Data model (SQLite)
+**What APP Shield does not work out itself.** The channel tells APP Shield three things:
+- the Confirmation of Payee result (does the name match the account?);
+- whether a remote-access app is active;
+- the customer's recent payment history.
 
-| Table | One row per | Holds | Never holds |
+APP Shield trusts these inputs, as the intent assumes. The only thing it looks up itself is the mule list.
+
+---
+
+## 3. "Missing" versus "unavailable"
+
+This distinction matters:
+
+- If the channel **leaves out** a required section, such as the Confirmation of Payee result, the request is broken: **REJECT**.
+- If the channel sends the section but says `"status": "UNAVAILABLE"`, that means the service behind it is down. APP Shield can't check the payment safely: **HOLD**.
+
+This keeps "the caller made a mistake" separate from "a system is down".
+
+---
+
+## 4. How the rules decide
+
+### Three kinds of signal
+
+Think of the rules as producing three kinds of flag:
+
+| Kind | Meaning | Leads to |
+|---|---|---|
+| **Can't check** (DEPENDENCY) | Something needed to judge the payment is unavailable | **HOLD** |
+| **Red flag** (HARD) | A strong sign of a scam | **HOLD** |
+| **Amber flag** (SOFT) | A warning sign worth asking the customer about | **WARN** |
+
+If no flags appear, the answer is **ALLOW**, with the reason `NO_RISK_SIGNAL`.
+
+**Three amber flags together count as a red flag.** For example, a near-miss payee name, the word "crypto" in the reference, and four new payees added today: each on its own is a WARN, but together they become a HOLD (`MULTIPLE_RISK_SIGNALS`).
+
+**All the rules run, even after a HOLD is certain.** This means the analyst sees every warning sign on a held payment, not just the first one found. It changes the list of reasons, never the decision.
+
+### The rules, in plain words
+
+Amounts below are the current settings in `config/rules.json`. They can be changed without touching code.
+
+| Reason code | In plain words | Result | Warning type shown |
 |---|---|---|---|
-| `decisions` | ALLOW / WARN / HOLD | `decision_id`, `payment_id` (UNIQUE), `correlation_id` (UNIQUE), `customer_id`, decision, `reason_codes`, `scam_category`, `ruleset_version`, `config_hash` (SHA-256 of the config file applied), amount, currency, `payee_token`, `payee_masked`, `signals`, `request_fingerprint`, stored `response` (for replay), `degraded`, `latency_ms`, `created_at` (UTC) | account number, payee name, reference |
-| `review_queue` | HOLD (same transaction as the decision) | `review_id`, `decision_id` (FK), `payment_id`, `customer_id`, amount, currency, `payee_masked`, `payee_token`, `reason_codes`, `scam_category`, `ruleset_version`, `priority`, `status` = `PENDING`, `created_at` | the same |
-| `rejections` | REJECT | `correlation_id`, `payment_id` (only if well formed), error field paths and messages | any submitted value |
+| `MULE_LIST_UNAVAILABLE` | The mule list is switched off, missing, unreadable, failing, or suspiciously small (for example empty). An empty list is never taken to mean "no mules" | HOLD | — |
+| `COP_UNAVAILABLE` | The name-check service (Confirmation of Payee) is down | HOLD | — |
+| `REMOTE_ACCESS_UNAVAILABLE` | We can't tell whether remote access is active | HOLD | — |
+| `HISTORY_UNAVAILABLE` | The customer's payment history is unavailable | HOLD | — |
+| `ENGINE_ERROR` | Something unexpected went wrong, or the decision couldn't be saved | HOLD | — |
+| `MULE_ACCOUNT_MATCH` | The payee is a known mule account | HOLD | Mule payee |
+| `REMOTE_ACCESS_NEW_PAYEE` | Someone may be remotely controlling the device, **and** the payee is new | HOLD | Remote-access scam |
+| `PAYEE_MISMATCH_HIGH_VALUE` | The payee name doesn't match the account, and the amount is $5,000 or more | HOLD | Invoice scam |
+| `NEW_PAYEE_VERY_HIGH_VALUE` | First payment to this payee, and $10,000 or more | HOLD | General scam |
+| `MULTIPLE_RISK_SIGNALS` | Three or more amber flags at once | HOLD | from the first amber flag |
+| `REMOTE_ACCESS_DETECTED` | Remote access is active, but the payee is known | WARN | Remote-access scam |
+| `PAYEE_MISMATCH` | The payee name doesn't match the account (under $5,000) | WARN | Invoice scam |
+| `PAYEE_CLOSE_MATCH` | The payee name is close, but not exact | WARN | Invoice scam |
+| `NEW_PAYEE_HIGH_VALUE` | First payment to this payee, $1,000 to under $10,000 | WARN | General scam |
+| `HIGH_VALUE_PAYMENT` | $25,000 or more, to any payee | WARN | General scam |
+| `UNUSUAL_PAYMENT_PATTERN` | At least $500 **and** at least 5× the customer's 90-day average (or they have no recent payments) | WARN | General scam |
+| `RAPID_PAYEE_ADDITIONS` | Three or more payees added in the last 24 hours | WARN | General scam |
+| `SCAM_KEYWORD_IN_REFERENCE` | The payment reference contains words like "bitcoin", "crypto", "ATO" or "warrant" (whole words only, so "Cryptography" doesn't count) | WARN | Investment or impersonation scam |
+| `NO_RISK_SIGNAL` | Nothing found | ALLOW | — |
 
-- **`payee_token`** = HMAC-SHA256(`APP_SHIELD_TOKEN_KEY`, BSB + account), truncated to 20 hex characters. Analysts can link payments to the same payee without the account being stored.
-- **`payee_masked`** looks like `062-*** *****678`.
-- **`request_fingerprint`** is an HMAC of the validated request, used for idempotent replay.
-- **`signals`** holds the derived inputs the rules used: CoP status, remote-access status, history status and figures, mule-list result, channel.
-- **Review priority:** 1 = mule match or any dependency failure, 2 = `REMOTE_ACCESS_NEW_PAYEE` / `PAYEE_MISMATCH_HIGH_VALUE` / `NEW_PAYEE_VERY_HIGH_VALUE`, 3 = escalated soft signals.
-- **Case resolution** (moving a review out of `PENDING`) is out of scope, as the intent states.
+**Deliberately, a new payee on its own does not trigger a warning.** People pay new payees all the time, and too many warnings teach customers to click through them. A new payee only matters together with the amount or another signal.
 
-## 5. Rules, configuration and decision precedence
+**A design choice to note:** remote access to a payee the customer has paid before is a WARN, not a HOLD. Some banks would hold any payment made while remote access is active. That is a business decision for the risk owners, and changing it would be a small rule change.
 
-### Configuration: `config/rules.json`
+### Which warning to show
+
+For WARN and HOLD, the answer includes a `scam_category`, such as *investment scam* or *remote-access scam*. The channel uses it to show a warning that matches what is probably happening to the customer, rather than a generic one.
+
+---
+
+## 5. When something breaks: failing closed
+
+APP Shield sits directly in the payment path, so it must never let a payment through just because something went wrong.
+
+| What goes wrong | What APP Shield does |
+|---|---|
+| The mule list is switched off, missing, corrupt, empty, or raises an error | Every payment is **HELD** (`MULE_LIST_UNAVAILABLE`), and `/health` says **degraded** |
+| The channel reports the name-check, remote-access or history service as unavailable | **HOLD** with the matching reason |
+| A bug or unexpected error while checking | **HOLD** (`ENGINE_ERROR`). Never a crash, never an error page the channel could misread |
+| The decision can't be saved to the database | **HOLD** (`ENGINE_ERROR`). The log line records `persisted: false`, so there is still a trail |
+| Someone edits the rules file and makes a mistake | The mistake is ignored, the last good rules stay in force, and `/health` says **degraded** (`config: stale`) |
+| There are no valid rules at all when starting up | The service refuses to start |
+| APP Shield itself is down or too slow | The channel must treat that as HOLD. This is part of the agreed contract with the channel, not something APP Shield can enforce |
+
+**Why hold *every* payment during a mule-list outage?** It is the strictest and simplest reading of "fail closed", and the easiest to audit. The cost is that an outage stops all payments, so this needs revisiting with the business. See [decisions.md](decisions.md) (D2).
+
+---
+
+## 6. Changing the rules without a code release
+
+All amounts, keyword lists and switches live in one file, `config/rules.json`:
 
 ```json
 {
@@ -156,107 +178,157 @@ The README has real examples.
 }
 ```
 
-- **Reload on change.** The file's modification time and size are checked on every request. A change takes effect on the next request with no restart.
-- **Validation and fallback.** Bounds: amounts > 0, multiplier ≥ 1, counts ≥ 1, escalation ≥ 2, and warn amount below hold amount. An invalid edit is logged and ignored; the last good config stays active and `/health` reports `config: stale`. If no valid config exists at startup, the service will not start.
-- **Audit trail.** Every decision records `ruleset_version` and `config_hash`, so audit can prove the exact thresholds even if someone forgot to bump the version.
+- **Changes apply straight away.** APP Shield notices when the file changes and uses the new values on the next payment. There is no restart and no code change.
+- **Bad edits are caught.** Every value is checked. For example, amounts must be positive, and the "warn" amount must be below the "hold" amount. A bad edit is rejected and the previous good rules stay in force.
+- **Every decision records which rules were used:** the `ruleset_version` and a fingerprint (hash) of the exact file. Even if someone forgets to update the version number, the fingerprint proves which settings applied.
+- **Anyone can see the active rules** at `GET /config/rules`. It contains no secrets.
 
-### Rules (`app/services/rules.py`)
+---
 
-| Code | Category | Fires when | `scam_category` |
-|---|---|---|---|
-| `MULE_LIST_UNAVAILABLE` | DEPENDENCY | mule list switched off, missing, unreadable, raising, or smaller than `mule_list_min_entries` (an empty list never means "no mules") | — |
-| `COP_UNAVAILABLE` | DEPENDENCY | `confirmation_of_payee.status = UNAVAILABLE` | — |
-| `REMOTE_ACCESS_UNAVAILABLE` | DEPENDENCY | `session.remote_access = UNAVAILABLE` | — |
-| `HISTORY_UNAVAILABLE` | DEPENDENCY | `customer_history.status = UNAVAILABLE` | — |
-| `ENGINE_ERROR` | DEPENDENCY | unexpected exception, or the decision could not be stored | — |
-| `MULE_ACCOUNT_MATCH` | HARD | payee BSB + account on the mule list | MULE_PAYEE |
-| `REMOTE_ACCESS_NEW_PAYEE` | HARD | remote access detected **and** payee not previously paid | REMOTE_ACCESS_SCAM |
-| `PAYEE_MISMATCH_HIGH_VALUE` | HARD | CoP `NO_MATCH` and amount ≥ `payee_mismatch_hold_amount` | INVOICE_SCAM |
-| `NEW_PAYEE_VERY_HIGH_VALUE` | HARD | new payee and amount ≥ `new_payee_hold_amount` | GENERAL_SCAM |
-| `MULTIPLE_RISK_SIGNALS` | HARD | soft hits ≥ `soft_signal_escalation_count` | from first soft hit |
-| `REMOTE_ACCESS_DETECTED` | SOFT | remote access detected, payee not new (or history unknown) | REMOTE_ACCESS_SCAM |
-| `PAYEE_MISMATCH` | SOFT | CoP `NO_MATCH` below the hold amount | INVOICE_SCAM |
-| `PAYEE_CLOSE_MATCH` | SOFT | CoP `CLOSE_MATCH` | INVOICE_SCAM |
-| `NEW_PAYEE_HIGH_VALUE` | SOFT | new payee, warn amount ≤ amount < hold amount | GENERAL_SCAM |
-| `HIGH_VALUE_PAYMENT` | SOFT | amount ≥ `high_value_amount`, any payee | GENERAL_SCAM |
-| `UNUSUAL_PAYMENT_PATTERN` | SOFT | amount ≥ min amount and (≥ multiplier × 90-day average, or no 90-day baseline) | GENERAL_SCAM |
-| `RAPID_PAYEE_ADDITIONS` | SOFT | `payees_added_last_24h` ≥ threshold | GENERAL_SCAM |
-| `SCAM_KEYWORD_IN_REFERENCE` | SOFT | reference contains a configured keyword (whole word, any case) | keyword's group |
-| `NO_RISK_SIGNAL` | INFO | nothing else fired | — |
+## 7. What gets recorded, and what never does
 
-All amount comparisons use `Decimal` and `≥`, and every boundary has a test. A new payee alone does not warn; friction is targeted.
+### The audit record
 
-### Precedence (`app/services/decision_engine.py`)
+Every decision is saved, so audit and compliance can see what was decided, why, and under which rules.
 
-1. **Invalid → REJECT.** Stop: no enrichment, no scoring, no queue.
-2. **Run every rule whose inputs are available.** A rule with an unavailable input is skipped, and its DEPENDENCY code is reported instead. Other rules still run so the analyst sees every signal on a HOLD. This changes the reasons listed, never the outcome.
-3. **Escalate:** soft hits ≥ the configured count add `MULTIPLE_RISK_SIGNALS`.
-4. **Decide.**
-   - Any DEPENDENCY or HARD hit → **HOLD**, which is queued.
-   - Otherwise any SOFT hit → **WARN**, with `requires_customer_confirmation: true`.
-   - Otherwise → **ALLOW** with `NO_RISK_SIGNAL`.
-5. **Order reasons:** DEPENDENCY → HARD → SOFT. `scam_category` comes from the first reason that has one.
-6. **Fail closed:** any exception after validation, or a failed database write, gives **HOLD / `ENGINE_ERROR`**, never a 500. When the write failed, the log line (`persisted: false`) is the fallback audit trail.
+| Saved record | One per | What it contains |
+|---|---|---|
+| **Decision** | ALLOW, WARN or HOLD | Decision, reason codes, warning type, rule set version and config fingerprint, amount, masked payee, the signals the rules used, tracking number, time (UTC) |
+| **Review queue entry** | HOLD | What an analyst needs: payment, customer, amount, masked payee, reasons, priority, status |
+| **Rejection** | REJECT | Tracking number and which fields were wrong. Never the values that were sent |
 
-**Owner decision:** while the mule list is unavailable, **every** payment is held (strictest reading of fail-closed). See [decisions.md](decisions.md).
+**Review priority:**
+1. Mule match, or a "can't check" problem.
+2. Another red flag.
+3. Three amber flags together.
 
-## 6. Scenario suite
+Resolving a case (moving it out of `PENDING`) is outside this project's scope.
 
-36 labelled synthetic scenarios live as data in `tests/scenarios/scenarios.json`: S01–S22 assessed, R01–R14 rejected. Each runs over HTTP against a fresh app and SQLite file. The runner checks the expected and actual decision and reason codes, ruleset version, correlation ID, persistence, and whether the request was scored and enriched (call counters). It writes `reports/scenario-report.md`. See [verify.md](verify.md) for results.
+### Protecting customer data
 
-## 7. Logging
+The full account number, payee name and payment reference are **never stored and never logged**.
 
-Every log line is one JSON object on stdout with a UTC `ts` (milliseconds, `Z`), `level`, `logger`, `event` and `correlation_id`. Fields are passed explicitly by name; the request is never dumped. A real decision line:
+- **Masked payee:** the database keeps a masked form like `062-*** *****678`, which shows the bank and the last three digits.
+- **Payee token:** a scrambled fingerprint of the account, made with a secret key (HMAC). An analyst can see that two payments went to the same payee without ever seeing the account number.
+- **Log lines contain only safe fields:** decision, reasons, rule version, tracking number, payee token, and an **amount band** (e.g. "1k-10k") instead of the exact amount. Customer IDs are not logged either.
+- **Errors are logged by type only** (e.g. "IntegrityError"), because an error message could accidentally contain payment details.
+- **Tests check this automatically.** They search all log output **and the raw database file** for every account number, BSB, name and reference used in the test scenarios.
+
+A real log line (shortened; the full line also has the decision ID, review ID, warning type, config fingerprint and timing):
 
 ```json
-{"ts":"2026-11-08T23:40:49.979Z","level":"INFO","logger":"app_shield.api","event":"payment_decision",
- "correlation_id":"demo-hold-0001","decision_id":"5b6a9ae8-…","payment_id":"PMT-DEMO-0003","decision":"HOLD",
- "reason_codes":["REMOTE_ACCESS_NEW_PAYEE","NEW_PAYEE_HIGH_VALUE","UNUSUAL_PAYMENT_PATTERN"],
- "scam_category":"REMOTE_ACCESS_SCAM","ruleset_version":"2026.11.1","config_hash":"29ade3d0ee34",
- "payee_token":"e237934f61835eb27272","amount_band":"1k-10k","degraded":false,
- "review_id":"3167e6aa-…","persisted":true,"latency_ms":23.56}
+{"ts":"2026-11-08T23:40:49.979Z","level":"INFO","event":"payment_decision","correlation_id":"demo-hold-0001",
+ "payment_id":"PMT-DEMO-0003","decision":"HOLD","reason_codes":["REMOTE_ACCESS_NEW_PAYEE","NEW_PAYEE_HIGH_VALUE","UNUSUAL_PAYMENT_PATTERN"],
+ "ruleset_version":"2026.11.1","payee_token":"e237934f61835eb27272","amount_band":"1k-10k","degraded":false,"persisted":true}
 ```
 
-- **Never logged:** the account number, BSB, payee name, reference text or customer ID. The amount appears only as a band; the exact amount is kept in the database for review.
-- **Errors** are logged by exception type only, because exception text can carry payment data.
-- **Event types:** `payment_decision`, `payment_rejected`, `payment_decision_replayed`, `audit_write_failed`, `assess_failed`, plus config and mule-list warnings.
+---
 
-## 8. Security, privacy and operational risks
+## 8. Talking to APP Shield (the API)
 
-| # | Risk | Mitigation in this slice | Beyond this slice |
-|---|---|---|---|
-| 1 | **Fail-open bug**: an error leads to release | Safety net returns HOLD / `ENGINE_ERROR`; tests inject engine and database failures | Channel treats timeout/5xx as HOLD; alert on `ENGINE_ERROR` rate |
-| 2 | **Sensitive data in logs** via validation errors, tracebacks or request dumps | Log fields passed explicitly; Pydantic `input` stripped; exception type only; tests scan logs **and raw DB files** for every scenario's account, BSB, name and reference | Central log DLP |
-| 3 | **Weak payee token** (an unkeyed hash of BSB+account can be brute forced) | HMAC with `APP_SHIELD_TOKEN_KEY`; `/health` shows `token_key: dev-default` when unset | Secrets manager and key rotation |
-| 4 | **Bad or tampered thresholds** | Bounds-checked schema, last-known-good, `config_hash` on every decision, `GET /config/rules` | Approval workflow, signed config, alert on version/hash change |
-| 5 | **Mule-list outage holds all traffic**; a **truncated list** could silently mean "no mules" | `/health` degraded; `MULE_LIST_UNAVAILABLE` on each decision. A list below `mule_list_min_entries` counts as unavailable (fixed after assessment finding D2) | Business call on outage scope; bounded stale cache; alert on a sharp size drop |
-| 6 | **Caller-supplied signals are trusted** | Out of scope per intent; documented | mTLS, signed attestations, server-side CoP |
-| 7 | **No authentication/authorisation** on any endpoint, including the review queue | Out of scope per intent; review data minimised | AuthN plus analyst role-based access |
-| 8 | **Synchronous latency** | No network calls in the engine; one short transaction; `latency_ms` recorded per decision | p99 SLO and load test (not done) |
-| 9 | **SQLite single writer** | WAL; short transactions | Managed Postgres |
-| 10 | **Retries and duplicates**, including concurrent ones | Identical retry replays; conflicting reuse gets 409. A request that loses an insert race re-checks and answers as the winner did: one decision, one queue row (fixed after assessment finding D1; 12-way concurrency test) | Distributed idempotency store across replicas |
-| 11 | **Oversized or abusive payloads** | 16 KB body cap, length caps, amount cap | Gateway rate limiting |
-| 11a | **Look-alike input** (non-ASCII digits that never match the mule list; duplicate JSON keys giving two different amounts) | ASCII-only `[0-9]` patterns; duplicate keys rejected. Both were found in the Step 6 review; scenarios R13 and R14 guard them | Canonicalise identifiers at the channel boundary |
-| 12 | **Floating-point money** | Money is a decimal string, never a JSON number; `Decimal` throughout | — |
-| 13 | **Friction fatigue** | New payee alone does not warn; decision mix visible in logs | Per-rule WARN and confirm-through monitoring |
-| 14 | **Data retention** | Synthetic data only; no raw account, name or reference stored | Retention and purge policy |
-
-## 9. Technology choices and trade-offs
-
-| Choice | Why | Trade-off accepted |
+| Endpoint | What it's for | Possible answers |
 |---|---|---|
-| Rules with reason codes, no ML and no fraud score | Intent scopes ML out; rules are deterministic, explainable and versioned | Lower recall on novel patterns. A model could later add a signal behind the same contract |
-| Python 3.11+, FastAPI, Pydantic v2 | Typed validation is the REJECT path; OpenAPI for free | Slower than JVM/Go; fine with no network calls in the engine |
-| SQLite (stdlib) | Runs from a clean checkout with no setup | Single writer, not highly available; plain SQL ports to Postgres |
-| JSON config reloaded on change | Tune without a release; stdlib only (PyYAML was not installed) | No approval workflow; becomes a versioned config service in production |
-| Signals supplied by the channel | Matches the intent's assumptions | Service trusts the caller (risk 6) |
-| Synchronous HTTP | Decision needed before release | Service availability is in the payment path, hence fail closed |
+| `POST /payments/assess` | Check one payment before it is sent | 200 with ALLOW / WARN / HOLD. 422 REJECT (invalid). 409 REJECT (ID already used differently). 413 REJECT (over 16 KB) |
+| `GET /review-queue` | List held payments for analysts, most urgent first | 200 (503 if the database is down) |
+| `GET /review-queue/{payment_id}` | Full details of one held payment | 200, or 404 if it wasn't held |
+| `GET /health` | Is everything working? | `ok` or `degraded`, with the state of the mule list, database and rules |
+| `GET /config/rules` | Which rules are active right now | 200 |
 
-## 10. Likely production and cloud shape (not built)
+Interactive documentation is at `/docs` while the service runs. The README has a full real example request and answer.
 
-- **Runtime:** a container image on the bank's managed container platform (e.g. EKS or AKS), at least 3 replicas across zones, an internal load balancer, mTLS from the channel.
-- **Data:** managed Postgres for the three tables. Decision events also go to the enterprise event bus for analytics and case management.
-- **Dependencies:** the mule list becomes an upstream call with a short timeout, a circuit breaker and a bounded cache. The fail-closed rules are unchanged.
-- **Config and secrets:** thresholds in a versioned config repo, with risk-owner approval and GitOps promotion. The HMAC key in the cloud secrets manager.
-- **Observability:** JSON logs to the central platform; metrics on decision mix, reason-code rates, `ENGINE_ERROR`, degraded mode and p99 latency.
-- **CI/CD:** see [verify.md](verify.md) and [operate.md](operate.md). PR runs `verify.sh`, plus lint, type checks and scans. Main builds and signs an image and replays the scenarios against the container. Promotion goes shadow mode → canary → full, and rollback is by image or config revert.
+**Why ALLOW, WARN and HOLD all return HTTP 200.** They are all valid answers, not errors. The channel reads the `decision` field.
+
+**Retries and duplicates.** Payment channels often retry when a request times out, so APP Shield handles repeats safely:
+- **Same payment ID, same details:** the original answer is returned again, marked `Idempotent-Replay: true`. Even if 12 identical requests arrive at the same instant, they all get the **same single decision**, and only one review-queue entry is created.
+- **Same payment ID, different details** (for example a changed amount): REJECT (409). This is suspicious, so the payment is not assessed.
+- **A tracking number reused for a different payment:** REJECT (409).
+
+**Known gap:** `/health` returns HTTP 200 even when it reports "degraded". Monitoring that only looks at the status code would miss it. Returning 503 while degraded would fix this.
+
+---
+
+## 9. How the code is organised
+
+The core, meaning the rules and the decision logic, does no input or output of its own: it reads no files, touches no database and writes no logs. That makes it easy to test and to reason about. Everything that touches files, the database or logs sits around the edges.
+
+| Part | Job |
+|---|---|
+| `app/main.py` | Starts the service and gives each request its tracking number |
+| `app/api/payments.py` | The assess and review-queue endpoints. Coordinates the journey in section 2, handles duplicates, and turns any unexpected error into a HOLD |
+| `app/api/operations.py` | The health and active-rules endpoints |
+| `app/schemas.py` | Exactly what a valid request and answer look like |
+| `app/services/validator.py` | Checks a request and lists what's wrong, without repeating the submitted values |
+| `app/services/enrichment.py`, `mule_service.py` | Look up the mule list. Any problem becomes "unavailable", never a crash |
+| `app/services/rules.py` | The rules: one small function each |
+| `app/services/decision_engine.py` | Runs the rules and applies the order of importance |
+| `app/services/audit_service.py`, `app/database.py` | Masks and tokenises the payee, saves decisions, and serves the review queue |
+| `app/config.py` | Loads and checks the rules file, and notices when it changes |
+| `app/logging_setup.py` | Writes the one-line JSON logs with UTC times |
+
+**A weakness worth knowing:** the step-by-step coordination lives in the API file rather than in its own service module. It works and is tested, but a separate module would be cleaner as the system grows.
+
+---
+
+## 10. Risks and how they are handled
+
+| Risk | How this project handles it | What production would add |
+|---|---|---|
+| A bug lets a risky payment through | Any error becomes HOLD; tests deliberately inject failures | Alerts on `ENGINE_ERROR` |
+| Customer data leaks into logs | Only named safe fields are logged; automated scans of logs and the database | Central data-loss-prevention scanning |
+| Look-alike input tricks the checks (other alphabets' digits, repeated fields) | Only plain 0–9 digits accepted; repeated fields rejected | Clean identifiers at the channel boundary |
+| Someone sets dangerous thresholds | Values are range-checked; bad edits ignored; every decision records the exact rules | Approval workflow and signed config |
+| The mule list fails or arrives empty | Treated as unavailable: every payment HELD, health degraded | A short-lived cached copy; alerts on sudden list shrinkage |
+| Retries produce different answers | One stored decision per payment ID, replayed to every repeat, including simultaneous ones | A shared store across multiple servers |
+| The channel's inputs are false | Trusted, as the intent allows | Signed inputs, or APP Shield calling those services itself |
+| No login on any endpoint | Out of scope for this project; review data is minimised | Service-to-service authentication; analyst roles |
+| Money rounding errors | Amounts are exact decimals, never floating-point numbers | — |
+| Too many warnings annoy customers | New payee alone doesn't warn; the warning rate is visible in logs | Monitoring of warning and confirm-through rates per rule |
+| Too much traffic for one small database | Fine for a local demo | A managed database (e.g. Postgres) |
+
+---
+
+## 11. Why it was built this way
+
+| Choice | Why | The cost |
+|---|---|---|
+| Clear rules with reason codes, not machine learning or a "fraud score" | Every decision can be explained, tested and audited; the intent rules out ML | May miss brand-new scam patterns. A model could later add one more signal |
+| Python with FastAPI and Pydantic | Strong, automatic request checking; API documentation for free | Slower than some languages, but the rules make no network calls, so it is fast enough |
+| SQLite database | Runs on any laptop with no setup | Not built for high traffic or high availability |
+| Rules in a JSON file, reloaded automatically | Risk owners can tune without a release | No approval workflow yet |
+| Hold every payment during a mule-list outage | Safest and simplest to audit | An outage stops all payments |
+
+---
+
+## 12. What production would look like (not built)
+
+- **Running it:** packaged as a container and run as at least three copies across data centres, behind an internal load balancer, with secure connections from the channel.
+- **Data:** a managed database, plus a stream of decisions to the bank's event platform for analytics and case management.
+- **Mule list:** a call to the real upstream service, with a short timeout and a small cache. It would still fail closed.
+- **Rules and secrets:** rules kept in version control with risk-owner approval before release; the secret key kept in a secrets manager.
+- **Monitoring:** dashboards and alerts for the decision mix, errors, degraded mode and response times.
+- **Release process:**
+  1. Every change runs the full test suite (`verify.sh`, already running in GitHub Actions).
+  2. Then a test environment.
+  3. Then "shadow mode": decisions are recorded but not acted on, and compared with the current system.
+  4. Then a small live slice, then everyone.
+  5. Rollback means redeploying the previous version or reverting the rules file.
+
+---
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **APP scam** | Authorised push payment scam: the customer is tricked into sending the money themselves |
+| **Payment channel** | The bank's mobile or web banking backend, which asks APP Shield before sending a payment |
+| **BSB** | Bank-State-Branch number: the 6-digit code that identifies an Australian bank branch |
+| **Confirmation of Payee (CoP)** | A check of whether the account name the customer typed matches the real account holder |
+| **Mule account** | A bank account used to receive and pass on stolen money |
+| **Remote access** | Screen-sharing or remote-control software. Scammers often ask victims to install it |
+| **Fail closed** | When unsure or when something breaks, choose the safe option (HOLD), not the convenient one (ALLOW) |
+| **Reason code** | A short label explaining why a decision was made, e.g. `PAYEE_MISMATCH` |
+| **Rule set version / config fingerprint** | Which version of the rules made a decision, and a hash proving the exact settings used |
+| **Correlation ID** | A tracking number that follows one request through the answer, the logs and the database |
+| **Idempotent replay** | Sending the same request twice gives the same answer, without assessing or saving it twice |
+| **HMAC token** | A scrambled fingerprint made with a secret key. It identifies the same payee without revealing the account number |
+| **Degraded** | The service is running, but something it relies on isn't working, so it holds payments to stay safe |
