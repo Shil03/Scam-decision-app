@@ -15,6 +15,7 @@
     "IMPERSONATION_SCAM": ["ato", "tax debt", "police", "warrant"]
   },
   "dependencies": {
-    "mule_list_enabled": true
+    "mule_list_enabled": true,
+    "mule_list_min_entries": 1
   }
 }

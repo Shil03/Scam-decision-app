@@ -19,7 +19,7 @@ log = logging.getLogger("app_shield.enrichment")
 
 
 class MuleLookup(Protocol):
-    def check(self, bsb: str, account_number: str, enabled: bool) -> MuleResult: ...
+    def check(self, bsb: str, account_number: str, enabled: bool, min_entries: int = 1) -> MuleResult: ...
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,8 @@ class Signals:
 def enrich(request: PaymentRequest, config: RuleConfig, mule_service: MuleLookup) -> Signals:
     try:
         mule = mule_service.check(request.payee.bsb, request.payee.account_number,
-                                  enabled=config.dependencies.mule_list_enabled)
+                                  enabled=config.dependencies.mule_list_enabled,
+                                  min_entries=config.dependencies.mule_list_min_entries)
     except Exception as exc:  # noqa: BLE001 - an unhealthy dependency is unavailable, not fatal
         log.error("mule list check failed: %s", exc.__class__.__name__)
         mule = MuleResult.UNAVAILABLE

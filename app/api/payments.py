@@ -100,21 +100,22 @@ def _assess_and_record(state: AppState, body: bytes, correlation_id: str, starte
     persisted = True
     try:
         fingerprint = state.audit.request_fingerprint(req)
-        existing = state.audit.find_decision(req.payment_id)
-        if existing is not None:
-            if existing["request_fingerprint"] == fingerprint:
-                log_event(log, "payment_decision_replayed", correlation_id=correlation_id,
-                          payment_id=req.payment_id, decision_id=existing["decision_id"])
-                return JSONResponse(json.loads(existing["response"]), headers={"Idempotent-Replay": "true"})
-            return _reject(state, correlation_id, [FieldError(
-                field="payment_id", issue="already assessed with a different payload")], 409, req.payment_id)
-        if state.audit.correlation_in_use(correlation_id):
-            return _reject(state, correlation_id, [FieldError(
-                field="X-Correlation-ID", issue="already used for another payment")], 409, req.payment_id)
-        state.audit.record_decision(
-            decision, decision_id=decision_id, review_id=review_id, config_hash=loaded.config_hash,
-            fingerprint=fingerprint, response=response, latency_ms=(time.perf_counter() - started) * 1000,
-            created_at=now)
+        prior = _prior_outcome(state, req.payment_id, fingerprint, correlation_id)
+        if prior is not None:
+            return prior
+        try:
+            state.audit.record_decision(
+                decision, decision_id=decision_id, review_id=review_id, config_hash=loaded.config_hash,
+                fingerprint=fingerprint, response=response, latency_ms=(time.perf_counter() - started) * 1000,
+                created_at=now)
+        except sqlite3.IntegrityError:
+            # Lost a race: a concurrent request with the same payment_id or correlation ID committed
+            # between the check above and this insert. Answer exactly as that request did
+            # (assessment finding D1), instead of an unrecorded HOLD.
+            prior = _prior_outcome(state, req.payment_id, fingerprint, correlation_id)
+            if prior is not None:
+                return prior
+            raise
     except Exception as exc:  # noqa: BLE001 - cannot record => cannot release: HOLD
         log_event(log, "audit_write_failed", logging.ERROR, correlation_id=correlation_id, error=exc.__class__.__name__)
         decision = fail_closed(correlation_id, decision.ruleset_version, req)
@@ -131,6 +132,26 @@ def _assess_and_record(state: AppState, body: bytes, correlation_id: str, starte
         persisted=persisted, latency_ms=round((time.perf_counter() - started) * 1000, 2),
     )
     return JSONResponse(response)
+
+
+def _prior_outcome(state: AppState, payment_id: str, fingerprint: str, correlation_id: str) -> JSONResponse | None:
+    """The answer for a payment_id or correlation ID that already has a stored decision, else None.
+
+    Same payment_id and payload: replay the stored response. Same payment_id with a different
+    payload, or a correlation ID already used for another payment: 409 REJECT.
+    """
+    existing = state.audit.find_decision(payment_id)
+    if existing is not None:
+        if existing["request_fingerprint"] == fingerprint:
+            log_event(log, "payment_decision_replayed", correlation_id=correlation_id,
+                      payment_id=payment_id, decision_id=existing["decision_id"])
+            return JSONResponse(json.loads(existing["response"]), headers={"Idempotent-Replay": "true"})
+        return _reject(state, correlation_id, [FieldError(
+            field="payment_id", issue="already assessed with a different payload")], 409, payment_id)
+    if state.audit.correlation_in_use(correlation_id):
+        return _reject(state, correlation_id, [FieldError(
+            field="X-Correlation-ID", issue="already used for another payment")], 409, payment_id)
+    return None
 
 
 def _response(decision: Decision, decision_id: str, review_id: str | None, evaluated_at: str) -> dict:

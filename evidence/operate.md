@@ -35,7 +35,7 @@ python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
 `status` is `degraded` when any of the following holds:
-- `mule_list` is `disabled` (switched off in config) or `down` (file missing or unreadable);
+- `mule_list` is `disabled` (switched off in config) or `down` (file missing, unreadable, or fewer entries than `mule_list_min_entries`);
 - `database` is `down`;
 - `config` is `stale` (the last edit was invalid and ignored).
 
@@ -68,7 +68,7 @@ Logs never contain the account number, BSB, payee name, reference text or custom
 **Simulate a mule-list outage**
 1. Set `"dependencies": {"mule_list_enabled": false}` in `config/rules.json`.
 2. `GET /health` → `degraded`, `mule_list: disabled`. Every payment → HOLD `MULE_LIST_UNAVAILABLE`.
-3. Set it back to `true` to recover. Deleting or corrupting `sample-data/mule_accounts.json` has the same effect, but reports `down`.
+3. Set it back to `true` to recover. Deleting, corrupting or emptying `sample-data/mule_accounts.json` (or setting `mule_list_min_entries` above its size) has the same effect, but reports `down`.
 
 **Roll back**
 - **Config:** restore the previous `config/rules.json` (`git checkout <commit> -- config/rules.json`). It takes effect on the next request. Decisions record the version and hash, so the rollback window is auditable.
@@ -83,14 +83,14 @@ Logs never contain the account number, BSB, payee name, reference text or custom
 
 | Failure | What happens | Decision | Visible in |
 |---|---|---|---|
-| Mule list switched off, missing, corrupt or raising | Lookup returns `UNAVAILABLE` | HOLD `MULE_LIST_UNAVAILABLE` (all payments) | `/health` degraded; reason code; `degraded: true` |
+| Mule list switched off, missing, corrupt, raising, or below `mule_list_min_entries` (e.g. empty) | Lookup returns `UNAVAILABLE` | HOLD `MULE_LIST_UNAVAILABLE` (all payments) | `/health` degraded; reason code; `degraded: true`; `mule list unavailable` log |
 | CoP / remote-access / history sent as `UNAVAILABLE` | Dependent rules skipped | HOLD `*_UNAVAILABLE` | Reason code; `degraded: true` |
 | Config edit invalid | Edit ignored; last good config kept | Unchanged | `/health` `config: stale`; error log |
 | No valid config at startup | Service refuses to start | — | Startup error |
 | Database write fails | Decision cannot be recorded | HOLD `ENGINE_ERROR`, not queued | `audit_write_failed` + `payment_decision` with `persisted: false` |
 | Unexpected exception | Caught in the request path | HOLD `ENGINE_ERROR` (HTTP 200, never 500) | `assess_failed` |
 | Malformed or oversized request | Never enriched or scored | REJECT 422 / 413 | `payment_rejected` |
-| Retry with the same payload | Stored decision returned | Same as first time | `payment_decision_replayed`; `Idempotent-Replay` header |
+| Retry with the same payload, including simultaneous retries | Stored decision returned; a request that loses the insert race re-checks and replays | Same as first time, one stored decision | `payment_decision_replayed`; `Idempotent-Replay` header |
 | `payment_id` or correlation ID reused for something else | Not assessed | REJECT 409 | `payment_rejected` |
 | This service down or slow | — | Channel must treat it as HOLD (documented contract) | Channel side |
 

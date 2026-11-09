@@ -46,16 +46,28 @@ class MuleService:
             log.error("mule list unavailable: %s", exc.__class__.__name__)
             return None
 
-    def check(self, bsb: str, account_number: str, enabled: bool) -> MuleResult:
+    def _usable(self, min_entries: int) -> frozenset[str] | None:
+        """The loaded list, or None if it is missing, unreadable or implausibly small.
+
+        An empty or truncated list must not silently mean "no mules": that would ALLOW payments
+        to known mule accounts (assessment finding D2). Below the minimum, the list is unavailable.
+        """
+        keys = self._load()
+        if keys is not None and len(keys) < min_entries:
+            log.error("mule list unavailable: %d entries, minimum is %d", len(keys), min_entries)
+            return None
+        return keys
+
+    def check(self, bsb: str, account_number: str, enabled: bool, min_entries: int = 1) -> MuleResult:
         if not enabled:
             return MuleResult.UNAVAILABLE
-        keys = self._load()
+        keys = self._usable(min_entries)
         if keys is None:
             return MuleResult.UNAVAILABLE
         return MuleResult.MATCH if account_key(bsb, account_number) in keys else MuleResult.NO_MATCH
 
-    def status(self, enabled: bool) -> str:
-        """For /health: 'up', 'disabled' or 'down'."""
+    def status(self, enabled: bool, min_entries: int = 1) -> str:
+        """For /health: 'up', 'disabled' or 'down' (missing, unreadable or below the minimum size)."""
         if not enabled:
             return "disabled"
-        return "up" if self._load() is not None else "down"
+        return "up" if self._usable(min_entries) is not None else "down"

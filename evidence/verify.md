@@ -21,15 +21,15 @@ It also writes `reports/scenario-report.md`, with expected vs actual results for
 
 ## Actual result
 
-Final local run after the Step 6 review fixes (Windows 11, Git Bash, Python 3.15.2):
+Final local run after the Step 7 assessment fixes (Windows 11, Git Bash, Python 3.15.2):
 
 ```
 == 1/6 Python version (3.11+ required)                  3.15.2
 == 2/6 Dependencies importable                          fastapi 0.162.2 | pydantic 2.14.3
 == 3/6 Byte-compile application code                    ok
-== 4/6 Shipped rule config and mule list stub are valid ruleset 2026.11.1 | config sha256 29ade3d0ee34 | mule list up
+== 4/6 Shipped rule config and mule list stub are valid ruleset 2026.11.1 | config sha256 0afe906337af | mule list up
 == 5/6 Repository hygiene                               ok
-== 6/6 Tests                                            169 passed in 12.37s
+== 6/6 Tests                                            177 passed in 9.23s
 Scenario report: 36/36 scenarios passed.
 VERIFY PASSED            (exit code 0)
 ```
@@ -38,17 +38,17 @@ VERIFY PASSED            (exit code 0)
 
 **CI:** `.github/workflows/verify.yml` runs `verify.sh` on every push and PR, on Python 3.11, 3.12 and 3.13 (Ubuntu), and uploads the scenario report as an artifact. Results are on the repository's **Actions** tab. The first CI run (Step 5 commit) passed on all three versions with 159 tests and 34/34 scenarios each.
 
-## Test inventory (169)
+## Test inventory (177)
 
 | File | Tests | What it proves |
 |---|---|---|
 | `tests/test_schemas.py` | 36 | Valid requests parse. Every malformed variant fails validation, including floats, NaN, 3 dp amounts, unknown fields and loose types. Amount errors are clear (a negative gives "greater than 0"). Non-ASCII digits are rejected |
-| `tests/test_config_and_mule_list.py` | 12 | Threshold change picked up without restart. Invalid edits keep the last good config and mark it stale. No valid config means no start. Mule stub match / no-match / disabled / missing / corrupt |
+| `tests/test_config_and_mule_list.py` | 14 | Threshold change picked up without restart. Invalid edits keep the last good config and mark it stale. No valid config means no start. Mule stub match / no-match / disabled / missing / corrupt / below minimum size |
 | `tests/test_engine.py` | 30 | Every rule and its `≥` boundary, precedence, escalation, reason order, `scam_category`, degraded flag, config-driven thresholds, exception gives HOLD |
 | `tests/test_pipeline.py` | 18 | `assess()`: REJECT never reaches the mule list or the rules. Errors never echo submitted values. Contract fields always present. WARN asks for confirmation and HOLD is queued. Mule failure gives HOLD |
-| `tests/test_api.py` | 26 | Full HTTP workflow on a real SQLite file: persistence, review queue and detail, 404s, REJECT 422/413, replay and 409s, correlation IDs, mule switch-off and `/health`, config hot reload and `/config/rules`, DB write failure gives HOLD, exception gives HOLD (not 500), log lines and **raw DB bytes** free of sensitive values. Review regressions: parser `RecursionError` gives REJECT, duplicate keys give REJECT, safety-net HOLD logs a decision |
+| `tests/test_api.py` | 31 | Full HTTP workflow on a real SQLite file: persistence, review queue and detail, 404s, REJECT 422/413, replay and 409s, correlation IDs, mule switch-off and `/health`, config hot reload and `/config/rules`, DB write failure gives HOLD, exception gives HOLD (not 500), log lines and **raw DB bytes** free of sensitive values. Review regressions: parser `RecursionError` gives REJECT, duplicate keys give REJECT, safety-net HOLD logs a decision. Assessment regressions: race loser replays or gets 409; 12 concurrent identical requests get one decision; empty mule list gives HOLD and degraded; minimum size configurable |
 | `tests/test_scenarios.py` | 36 | The labelled scenario suite (below) |
-| `tests/test_acceptance.py` | 11 | The owner's acceptance checks, swept across the whole suite (below) |
+| `tests/test_acceptance.py` | 12 | The owner's acceptance checks, swept across the whole suite (below) |
 
 ## Labelled scenario suite: actual results
 
@@ -94,7 +94,7 @@ Defined as data in `tests/scenarios/scenarios.json`. For each scenario the runne
 | REJECT never invokes the risk engine | All 12 REJECT scenarios with call counters on the engine and the mule lookup | 0 and 0 calls; 0 decision rows; 12 rejection rows. **PASS** |
 | Every non-REJECT result has ≥ 1 reason code | All plain assessed scenarios | **PASS** |
 | Every decision records the active ruleset version | 9 scenarios, version bumped in config, 9 more; decisions **and** queue rows checked | **PASS** |
-| Mule-list failure can never return ALLOW | Every assessed scenario × {switched off, file missing, file corrupt, lookup raising `TimeoutError`} | All HOLD `MULE_LIST_UNAVAILABLE`. **PASS** (4 tests) |
+| Mule-list failure can never return ALLOW | Every assessed scenario × {switched off, file missing, file corrupt, file empty, lookup raising `TimeoutError`} | All HOLD `MULE_LIST_UNAVAILABLE`. **PASS** (5 tests) |
 | Health reports degraded when the dependency is disabled | `/health` before and after the switch | `ok` → `degraded`, `mule_list: disabled`. **PASS** |
 | Config changes reflected without code change | Same payment before and after editing only `rules.json` | WARN → ALLOW with the new version. **PASS** |
 | Logs do not expose raw account details | All 36 scenarios; every account number, BSB, name and reference searched in all log output | No leaks; every line valid JSON. **PASS** |
@@ -123,6 +123,7 @@ Passing tests prove little if they can't fail. During the build, bugs were delib
 | 3 | DB write failure keeps the original decision; raw account logged; retries not replayed; `/health` ignores the mule list; HOLD not queued | API tests |
 | 4 | `REMOTE_ACCESS_NEW_PAYEE` disabled | 4 tests, including scenario S08; `verify.sh` exit 1 |
 | 6 | Review fixes reverted to the Step 5 code | All 10 new regression tests fail (R13 → ALLOW for a mule account, R14 → WARN on an ambiguous amount) |
+| 7 | Assessment fixes reverted to the Step 6 code | All 8 new regression tests fail (concurrency test: 1 ALLOW + 11 HOLD; empty list: health `ok`) |
 
 Every bug was caught, and the code was restored after each check.
 
@@ -160,11 +161,24 @@ Checked and found sound, with no change made:
 - **Logs:** no account number, BSB, name, reference or customer ID.
 
 Accepted risks, not fixed (no new features in this review):
-- **Concurrent duplicates.** Two *simultaneous* first attempts with the same `payment_id` or correlation ID: the second hits the UNIQUE constraint and gets HOLD `ENGINE_ERROR` rather than a replay or 409. It is safe, never ALLOW (design risk 10).
-- **Empty mule list reports `up`.** A valid but empty mule-list file is treated as healthy. A truncated upstream list would go unnoticed; production should alert on a sudden size drop.
 - **Body size checked after reading.** The 16 KB limit is checked after the body is read, so a gateway limit is needed in production (design risk 11).
 - **Customer confirmation is not recorded.** WARN tells the channel to obtain confirmation, but the confirmation itself is not recorded back to the service. Enforcement is the channel's job under the intent.
 - **Replay keeps the original correlation ID.** An identical retry with a *new* correlation ID gets the original response body, which carries the original correlation ID; only the response header has the new one.
+
+## Technical assessment (Step 7)
+
+A further assessment executed every scenario and control against the live backend with independent payloads. It found 24/25 checks PASS. The one FAIL was remote access to a *known* payee returning WARN, which is a deliberate design rule. Probing also found two weaknesses that the review in Step 6 had wrongly accepted as risks. Both were reproduced on the live server, then fixed:
+
+| # | Finding (live server, before the fix) | Fix | After the fix (live server) |
+|---|---|---|---|
+| D1 | 12 simultaneous identical first attempts returned **1 ALLOW + 11 HOLD `ENGINE_ERROR`**; the 11 HOLDs were not stored or queued | A request that loses the insert race re-runs the duplicate check and replays the winner's stored decision (or gets 409) | 12 × ALLOW, one `decision_id`, 11 replays (3 runs). The HOLD variant gave 12 × HOLD and **1** queue row |
+| D2 | Mule list file `{"accounts": []}`: health `ok/up`, and a known mule account was **ALLOWED** | `dependencies.mule_list_min_entries` (default 1): a smaller list is unavailable | Health `degraded/down`; the mule account gave HOLD `MULE_LIST_UNAVAILABLE` |
+
+Open from the assessment, not changed:
+- **D3:** `/health` returns HTTP 200 while degraded.
+- **D4:** no authentication (out of scope).
+- **D6:** remote access to a known payee gives WARN, which is a business decision.
+- **D7:** the body size limit is checked after reading.
 
 ## Known gaps
 

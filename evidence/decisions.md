@@ -17,6 +17,7 @@ Short records of the decisions that shaped the slice, and what was deliberately 
   - any unexpected exception, which returns HOLD / `ENGINE_ERROR` with HTTP 200, never a 500.
 
   A *missing* input block is treated differently: it is a malformed request and gets REJECT.
+- **Empty is not healthy (assessment finding D2, fixed):** a mule list with fewer entries than `mule_list_min_entries` (default 1) is treated as unavailable. Without this, an empty or truncated feed silently meant "no mules", and a known mule account was ALLOWED.
 - **Trade-off:** the strictest and simplest rule to audit. The cost is that an outage holds all traffic. This is mitigated by `/health` and the reason code, and should be revisited with the business, for example by trusting payees already paid or allowing a bounded stale cache.
 
 ## D3. Thresholds in a hot-reloaded JSON file, with a last-known-good fallback
@@ -46,7 +47,8 @@ Short records of the decisions that shaped the slice, and what was deliberately 
   - **Same `payment_id` and same payload:** the stored response is returned (`Idempotent-Replay: true`), even if thresholds have changed since.
   - **Same `payment_id` with a different payload, or a correlation ID reused for another payment:** 409 REJECT.
   - **Database:** both IDs are `UNIQUE`.
-- **Trade-off:** two *simultaneous* first attempts are not fully serialised. The second write hits the UNIQUE constraint and fails closed (HOLD), which is safe but not elegant. Production would use a distributed idempotency store.
+- **Concurrency (assessment finding D1, fixed):** originally, a request that lost the insert race got an unrecorded HOLD `ENGINE_ERROR`. 12 simultaneous attempts produced 1 ALLOW and 11 HOLDs. Now the loser re-runs the duplicate check and replays the winner's decision (or gets 409), so every caller sees one decision.
+- **Trade-off:** this relies on the database's UNIQUE constraint, so it holds for one database. Several replicas would need a shared idempotency store.
 
 ## Deliberately not built
 

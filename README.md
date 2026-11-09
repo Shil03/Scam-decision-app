@@ -49,7 +49,7 @@ python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ./verify.sh                        # Windows (Git Bash): bash verify.sh
 ```
 
-It runs environment, config and repository-hygiene checks, then **all 169 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 169 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
+It runs environment, config and repository-hygiene checks, then **all 177 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 177 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
 
 ## Example
 
@@ -129,7 +129,7 @@ TIMELOG.md                build timeline per step
 
 - **No authentication or authorisation.** All endpoints, including the review queue, are open. This is out of scope for the slice.
 - **Inputs are trusted.** Confirmation of Payee, remote-access and history signals are taken from the request, not verified.
-- **The mule list is a local synthetic stub.** While it is unavailable, *all* payments are held, by owner decision. That is safe but blunt.
+- **The mule list is a local synthetic stub.** While it is unavailable, *all* payments are held, by owner decision. "Unavailable" includes switched off, missing, unreadable, or smaller than `mule_list_min_entries` (e.g. an empty, truncated feed). That is safe but blunt.
 - **No case workflow.** Held payments can be listed but not resolved; status stays `PENDING`.
 - **Local scale only.** SQLite is single-node with a single writer. There has been no load testing.
 - **The token key has a dev default.** It is flagged as `dev-default` in `/health`. Set `APP_SHIELD_TOKEN_KEY` for anything shared.

@@ -17,7 +17,8 @@
 | 3 | Owner's API and persistence specification: five endpoints, unique IDs, logging, privacy | 10:32 |
 | 4 | "Act as a Senior Banking QA Automation Engineer": scenario suite, acceptance checks, `verify.sh` | 10:38 |
 | 5 | Documentation against the actual implementation | 10:48 |
-| 6 | Independent senior engineering review; fix critical defects only | see `git log` |
+| 6 | Independent senior engineering review; fix critical defects only | 10:58 |
+| 7 | "Act as a Senior Software Engineering Technical Assessor" (read-only), then "fix D1 and D2" | see `git log` |
 
 Agent working time per step is in [TIMELOG.md](../TIMELOG.md). Between steps, the owner reviewed the summary and the diff, and either approved it or steered with the next prompt.
 
@@ -167,6 +168,31 @@ The agent built from the approved design §3 and §5. It wrote `app/schemas.py`,
 
   Five accepted risks are recorded instead of fixed, because fixing them would add features.
 - **Result:** 169 tests passed, 36/36 scenarios, `verify.sh` exit 0.
+
+### Step 7: Technical assessment, then fixes D1 and D2
+
+**Steering prompts (excerpts):**
+> Act as a Senior Software Engineering Technical Assessor […] Do not modify the code. Do not fabricate test results. Do not assume a feature works because it is documented.
+
+and then:
+
+> lets fix the D1 and D2
+
+**What the agent did:**
+- **Ran the assessment without modifying code.** It started the backend with isolated copies of the config, mule list and database, and drove it over HTTP with payloads written independently of the project's scenario file. It read the SQLite file directly and scanned the server's log output.
+- **Results:** 24/25 checks PASS. A5b failed (remote access to a known payee is WARN by design). C3b is NOT VERIFIED (the channel enforces customer confirmation).
+- **Stated its own conflict of interest.** The agent had built the code, so it declared that the review was not independent.
+
+**Interventions and review:**
+- **The assessment overturned the agent's own earlier judgement.** In Step 6 the agent had recorded "concurrent duplicates" and "empty mule list" as accepted, *safe* risks. When the assessment executed them, they turned out to be contradictory decisions (D1) and a fail-open path (D2). Accepted risks were then judged by executing them, not by reasoning about them.
+- **Owner decision:** fix D1 and D2 only.
+- **How the fixes were proven:**
+  - every fix got a regression test (8 new);
+  - all 8 fail on the Step 6 code;
+  - the 12-way concurrency test passed 10/10 consecutive runs before it was relied on;
+  - both original probes were re-run against the live fixed server.
+- **Ruleset version unchanged.** `ruleset_version` stays `2026.11.1` because no threshold changed. Adding `mule_list_min_entries` changes the config file, and therefore `config_hash` (`0afe906337af`), which is what audit relies on to identify the exact config.
+- **Result:** 177 tests passed, 36/36 scenarios, `verify.sh` exit 0.
 
 ## How generated output is verified
 

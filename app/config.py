@@ -45,6 +45,8 @@ class Thresholds(_Frozen):
 
 class Dependencies(_Frozen):
     mule_list_enabled: StrictBool
+    # A list smaller than this is treated as unavailable (truncated upstream feed), not as "no mules".
+    mule_list_min_entries: StrictInt = Field(default=1, ge=1)
 
 
 Keyword = Annotated[str, StringConstraints(min_length=2, max_length=40)]

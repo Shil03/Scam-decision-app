@@ -17,7 +17,8 @@ def _state(request: Request) -> AppState:
 def health(request: Request) -> dict:
     state = _state(request)
     loaded = state.config_store.get()
-    mule = state.mule_service.status(enabled=loaded.rules.dependencies.mule_list_enabled)
+    deps = loaded.rules.dependencies
+    mule = state.mule_service.status(enabled=deps.mule_list_enabled, min_entries=deps.mule_list_min_entries)
     database = "up" if state.db.ping() else "down"
     config = "stale" if state.config_store.stale else "current"
     degraded = mule != "up" or database != "up" or config != "current"

@@ -15,6 +15,7 @@ import pytest
 from app.api import payments as payments_api
 from app.logging_setup import JsonFormatter
 from tests.conftest import payment
+from fastapi.testclient import TestClient
 from tests.support import ApiEnv as Env
 
 MULE_PAYEE = {"bsb": "999-001", "account_number": "11110001", "account_name": "Mule Holdings"}
@@ -275,3 +276,66 @@ def test_safety_net_hold_emits_a_decision_log_line(env, monkeypatch, caplog):
     assert decision["correlation_id"] == "corr-safety-0001"
     assert decision["decision"] == "HOLD" and decision["reason_codes"] == ["ENGINE_ERROR"]
     assert decision["persisted"] is False and decision["ruleset_version"] == "2026.11.1"
+
+
+# ---------- assessment regressions: D1 concurrent duplicates, D2 empty mule list ----------
+
+def _lose_the_race(env, monkeypatch):
+    """Make the next pre-insert duplicate check miss an already-committed decision, exactly as a
+    request does when a concurrent request commits between its check and its insert."""
+    audit = env.app.state.shield.audit
+    real, calls = audit.find_decision, {"n": 0}
+    def find_decision(payment_id):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real(payment_id)
+    monkeypatch.setattr(audit, "find_decision", find_decision)
+
+
+def test_race_loser_with_same_payload_gets_the_winners_decision(env, monkeypatch):
+    first = env.assess(payment(payment_id=pid(40), payee=MULE_PAYEE), "corr-race-0001").json()
+    _lose_the_race(env, monkeypatch)
+    r = env.assess(payment(payment_id=pid(40), payee=MULE_PAYEE), "corr-race-0002")
+    assert r.status_code == 200 and r.headers["Idempotent-Replay"] == "true"
+    assert r.json() == first                                   # not an unrecorded HOLD ENGINE_ERROR
+    assert len(env.rows("SELECT * FROM decisions")) == 1
+    assert env.client.get("/review-queue").json()["count"] == 1
+
+
+def test_race_loser_with_different_payload_gets_409(env, monkeypatch):
+    env.assess(payment(payment_id=pid(41)), "corr-race-0003")
+    _lose_the_race(env, monkeypatch)
+    r = env.assess(payment(payment_id=pid(41), amount="999.00"), "corr-race-0004")
+    assert r.status_code == 409 and r.json()["errors"][0]["field"] == "payment_id"
+
+
+def test_concurrent_identical_first_attempts_all_get_one_consistent_decision(env):
+    """Assessment D1: 12 simultaneous first attempts used to return 1 ALLOW + 11 HOLD ENGINE_ERROR."""
+    from concurrent.futures import ThreadPoolExecutor
+    body = json.dumps(payment(payment_id=pid(42))).encode()
+    def fire(_):
+        with TestClient(env.app) as client:
+            r = client.post("/payments/assess", content=body, headers={"Content-Type": "application/json"})
+            return r.status_code, r.json()["decision"], r.json()["decision_id"]
+    with ThreadPoolExecutor(12) as pool:
+        results = list(pool.map(fire, range(12)))
+    assert {(s, d) for s, d, _ in results} == {(200, "ALLOW")}, results
+    assert len({decision_id for *_, decision_id in results}) == 1      # every caller saw the same decision
+    assert len(env.rows("SELECT * FROM decisions")) == 1
+
+
+def test_empty_mule_list_is_unavailable_not_healthy(env):
+    """Assessment D2: an empty (truncated) list reported 'up' and ALLOWED a known mule account."""
+    env.mules.write_text('{"accounts": []}', encoding="utf-8")
+    health = env.client.get("/health").json()
+    assert health["status"] == "degraded" and health["dependencies"]["mule_list"] == "down"
+    body = env.assess(payment(payment_id=pid(43), payee=MULE_PAYEE)).json()
+    assert body["decision"] == "HOLD" and body["reason_codes"] == ["MULE_LIST_UNAVAILABLE"]
+
+
+def test_mule_list_minimum_size_is_configurable(env):
+    env.edit_config(lambda d: d["dependencies"].update(mule_list_min_entries=4))   # stub has 3 entries
+    assert env.client.get("/health").json()["dependencies"]["mule_list"] == "down"
+    assert env.assess(payment(payment_id=pid(44))).json()["reason_codes"] == ["MULE_LIST_UNAVAILABLE"]
+    env.edit_config(lambda d: d["dependencies"].update(mule_list_min_entries=3))
+    assert env.client.get("/health").json()["status"] == "ok"
+    assert env.assess(payment(payment_id=pid(45))).json()["decision"] == "ALLOW"

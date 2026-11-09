@@ -65,7 +65,7 @@ def test_every_decision_records_the_active_ruleset_version(env):
     assert holds >= 1 and queued == ["2026.11.1"] * holds + ["2026.11.9"] * holds
 
 
-@pytest.mark.parametrize("failure", ["switched_off", "file_missing", "file_corrupt", "lookup_raises"])
+@pytest.mark.parametrize("failure", ["switched_off", "file_missing", "file_corrupt", "file_empty", "lookup_raises"])
 def test_mule_list_failure_can_never_return_allow(env, monkeypatch, failure):
     if failure == "switched_off":
         env.edit_config(lambda d: d["dependencies"].update(mule_list_enabled=False))
@@ -73,6 +73,8 @@ def test_mule_list_failure_can_never_return_allow(env, monkeypatch, failure):
         env.mules.unlink()
     elif failure == "file_corrupt":
         env.mules.write_text("{ not json", encoding="utf-8")
+    elif failure == "file_empty":
+        env.mules.write_text('{"accounts": []}', encoding="utf-8")
     else:
         def raises(*_a, **_k):
             raise TimeoutError("upstream mule service timed out")

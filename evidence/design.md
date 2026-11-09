@@ -66,6 +66,7 @@ OpenAPI documentation is served at `/docs` while the app runs.
   - **Same `payment_id`, same payload:** the stored response is replayed with `Idempotent-Replay: true`, so a channel retrying after a timeout gets the same answer.
   - **Same `payment_id`, different payload:** 409 REJECT.
   - **Correlation ID reused for another payment:** 409 REJECT.
+  - **Concurrent duplicates:** a request that loses the race to insert (UNIQUE constraint) re-runs the same check, so it gets the winner's stored decision (or a 409), never a second, different decision.
 - **Channel contract (documented, not enforced):** a timeout, connection error or 5xx must be treated as HOLD by the channel.
 
 ## 3. Request and response schemas
@@ -151,7 +152,7 @@ The README has real examples.
     "INVESTMENT_SCAM": ["crypto", "bitcoin", "investment", "trading"],
     "IMPERSONATION_SCAM": ["ato", "tax debt", "police", "warrant"]
   },
-  "dependencies": {"mule_list_enabled": true}
+  "dependencies": {"mule_list_enabled": true, "mule_list_min_entries": 1}
 }
 ```
 
@@ -163,7 +164,7 @@ The README has real examples.
 
 | Code | Category | Fires when | `scam_category` |
 |---|---|---|---|
-| `MULE_LIST_UNAVAILABLE` | DEPENDENCY | mule list switched off, missing, unreadable or raising | — |
+| `MULE_LIST_UNAVAILABLE` | DEPENDENCY | mule list switched off, missing, unreadable, raising, or smaller than `mule_list_min_entries` (an empty list never means "no mules") | — |
 | `COP_UNAVAILABLE` | DEPENDENCY | `confirmation_of_payee.status = UNAVAILABLE` | — |
 | `REMOTE_ACCESS_UNAVAILABLE` | DEPENDENCY | `session.remote_access = UNAVAILABLE` | — |
 | `HISTORY_UNAVAILABLE` | DEPENDENCY | `customer_history.status = UNAVAILABLE` | — |
@@ -228,12 +229,12 @@ Every log line is one JSON object on stdout with a UTC `ts` (milliseconds, `Z`),
 | 2 | **Sensitive data in logs** via validation errors, tracebacks or request dumps | Log fields passed explicitly; Pydantic `input` stripped; exception type only; tests scan logs **and raw DB files** for every scenario's account, BSB, name and reference | Central log DLP |
 | 3 | **Weak payee token** (an unkeyed hash of BSB+account can be brute forced) | HMAC with `APP_SHIELD_TOKEN_KEY`; `/health` shows `token_key: dev-default` when unset | Secrets manager and key rotation |
 | 4 | **Bad or tampered thresholds** | Bounds-checked schema, last-known-good, `config_hash` on every decision, `GET /config/rules` | Approval workflow, signed config, alert on version/hash change |
-| 5 | **Mule-list outage holds all traffic** | `/health` degraded; `MULE_LIST_UNAVAILABLE` on each decision | Business call on outage scope; bounded stale cache |
+| 5 | **Mule-list outage holds all traffic**; a **truncated list** could silently mean "no mules" | `/health` degraded; `MULE_LIST_UNAVAILABLE` on each decision. A list below `mule_list_min_entries` counts as unavailable (fixed after assessment finding D2) | Business call on outage scope; bounded stale cache; alert on a sharp size drop |
 | 6 | **Caller-supplied signals are trusted** | Out of scope per intent; documented | mTLS, signed attestations, server-side CoP |
 | 7 | **No authentication/authorisation** on any endpoint, including the review queue | Out of scope per intent; review data minimised | AuthN plus analyst role-based access |
 | 8 | **Synchronous latency** | No network calls in the engine; one short transaction; `latency_ms` recorded per decision | p99 SLO and load test (not done) |
 | 9 | **SQLite single writer** | WAL; short transactions | Managed Postgres |
-| 10 | **Retries and duplicates** | Identical retry replays; conflicting reuse gets 409. Two simultaneous first attempts: the second write hits the UNIQUE constraint and fails closed (HOLD) | Distributed idempotency store |
+| 10 | **Retries and duplicates**, including concurrent ones | Identical retry replays; conflicting reuse gets 409. A request that loses an insert race re-checks and answers as the winner did: one decision, one queue row (fixed after assessment finding D1; 12-way concurrency test) | Distributed idempotency store across replicas |
 | 11 | **Oversized or abusive payloads** | 16 KB body cap, length caps, amount cap | Gateway rate limiting |
 | 11a | **Look-alike input** (non-ASCII digits that never match the mule list; duplicate JSON keys giving two different amounts) | ASCII-only `[0-9]` patterns; duplicate keys rejected. Both were found in the Step 6 review; scenarios R13 and R14 guard them | Canonicalise identifiers at the channel boundary |
 | 12 | **Floating-point money** | Money is a decimal string, never a JSON number; `Decimal` throughout | — |

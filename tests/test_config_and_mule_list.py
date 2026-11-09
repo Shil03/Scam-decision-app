@@ -94,3 +94,19 @@ def test_mule_list_missing_or_corrupt_is_unavailable(tmp_path):
     mules = MuleService(corrupt)
     assert mules.check("062-000", "12345678", enabled=True) is MuleResult.UNAVAILABLE
     assert mules.status(enabled=True) == "down"
+
+
+def test_mule_list_below_minimum_size_is_unavailable(tmp_path):
+    """Assessment D2: an empty or truncated list must not mean 'no mules'."""
+    empty = tmp_path / "empty.json"
+    empty.write_text('{"accounts": []}', encoding="utf-8")
+    mules = MuleService(empty)
+    assert mules.check("999-001", "11110001", enabled=True) is MuleResult.UNAVAILABLE
+    assert mules.status(enabled=True) == "down"
+    stub = MuleService(DEFAULT_MULE_LIST)                                   # 3 synthetic entries
+    assert stub.check("999-001", "11110001", enabled=True, min_entries=4) is MuleResult.UNAVAILABLE
+    assert stub.check("999-001", "11110001", enabled=True, min_entries=3) is MuleResult.MATCH
+
+
+def test_shipped_config_requires_a_non_empty_mule_list(config_file):
+    assert ConfigStore(config_file).get().rules.dependencies.mule_list_min_entries >= 1
