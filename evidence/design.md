@@ -231,7 +231,8 @@ A real log line (shortened; the full line also has the decision ID, review ID, w
 | `POST /payments/assess` | Check one payment before it is sent | 200 with ALLOW / WARN / HOLD. 422 REJECT (invalid). 409 REJECT (ID already used differently). 413 REJECT (over 16 KB) |
 | `GET /review-queue` | List held payments for analysts, most urgent first | 200 (503 if the database is down) |
 | `GET /review-queue/{payment_id}` | Full details of one held payment | 200, or 404 if it wasn't held |
-| `GET /health` | Is everything working? | `ok` or `degraded`, with the state of the mule list, database and rules |
+| `GET /health` | Is everything working? | HTTP 200 `ok`, or **HTTP 503 `degraded`**, with the state of the mule list, database and rules |
+| `GET /health/live` | Is the service process running at all? | HTTP 200 whenever it can answer |
 | `GET /config/rules` | Which rules are active right now | 200 |
 
 Interactive documentation is at `/docs` while the service runs. The README has a full real example request and answer.
@@ -243,7 +244,11 @@ Interactive documentation is at `/docs` while the service runs. The README has a
 - **Same payment ID, different details** (for example a changed amount): REJECT (409). This is suspicious, so the payment is not assessed.
 - **A tracking number reused for a different payment:** REJECT (409).
 
-**Known gap:** `/health` returns HTTP 200 even when it reports "degraded". Monitoring that only looks at the status code would miss it. Returning 503 while degraded would fix this.
+**Two health checks, on purpose.**
+- `/health` answers **503 while degraded**, so any monitoring tool notices, even one that only looks at the status code.
+- `/health/live` stays **200** as long as the process is running.
+
+The difference matters. During a mule-list outage, APP Shield is still doing its job: it answers every payment with a safe HOLD and records it for review. If a platform restarted it because of that, payments would get no answer at all, which is worse. So restart probes should use `/health/live`, and alerting should use `/health`.
 
 ---
 

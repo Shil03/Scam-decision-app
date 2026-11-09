@@ -18,7 +18,9 @@
 | 4 | "Act as a Senior Banking QA Automation Engineer": scenario suite, acceptance checks, `verify.sh` | 10:38 |
 | 5 | Documentation against the actual implementation | 10:48 |
 | 6 | Independent senior engineering review; fix critical defects only | 10:58 |
-| 7 | "Act as a Senior Software Engineering Technical Assessor" (read-only), then "fix D1 and D2" | see `git log` |
+| 7 | "Act as a Senior Software Engineering Technical Assessor" (read-only), then "fix D1 and D2" | 11:16 |
+| — | Re-assessment and score; plain-language rewrite of `design.md` | 11:33 |
+| 8 | "Yes please fix" (D3: health status code) | see `git log` |
 
 Agent working time per step is in [TIMELOG.md](../TIMELOG.md). Between steps, the owner reviewed the summary and the diff, and either approved it or steered with the next prompt.
 
@@ -193,6 +195,24 @@ and then:
   - both original probes were re-run against the live fixed server.
 - **Ruleset version unchanged.** `ruleset_version` stays `2026.11.1` because no threshold changed. Adding `mule_list_min_entries` changes the config file, and therefore `config_hash` (`0afe906337af`), which is what audit relies on to identify the exact config.
 - **Result:** 177 tests passed, 36/36 scenarios, `verify.sh` exit 0.
+
+### Step 8: Health status code (D3)
+
+**Steering prompt:**
+> yes please fix
+
+**What the agent did:**
+- **Before coding,** it pointed out a trap in the obvious fix. If `/health` returns 503 while degraded and a platform uses it as a liveness probe, a mule-list outage would put a service that is still answering safely (HOLD) into a **restart loop**.
+- **So the fix is two-part:**
+  - `/health` returns 503 while degraded, for alerting;
+  - a new `/health/live` always returns 200 while the process is up, for restart probes.
+
+**Interventions and review:**
+- **5 regression tests**, one per degraded cause: mule list switched off, missing or empty; config stale; database down. All 5 fail on the old code.
+- **One new test assertion was muddled** at first (a mixed `and`/`or` condition). It was rewritten to state the expected outcome per cause.
+- **A live server check:** outage → `/health` 503, `/health/live` 200, payment HOLD; recovery → 200.
+- **The agent made a mistake outside the project.** One tool call wrote a stray file, `C:\AKASHP~1\placeholder.txt`, with no purpose. The agent noticed immediately, checked the contents, and deleted the file. Removing the empty folder that the call had also created was blocked by Claude Code's safety check. The agent left it for the owner and reported it, rather than working around the check.
+- **Result:** 182 tests passed, 36/36 scenarios, `verify.sh` exit 0.
 
 ## How generated output is verified
 

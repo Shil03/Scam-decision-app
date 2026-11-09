@@ -39,7 +39,9 @@ python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 - `database` is `down`;
 - `config` is `stale` (the last edit was invalid and ignored).
 
-It always returns HTTP 200, so the body is the signal. While degraded, affected payments are HELD, never allowed.
+It returns **HTTP 200 when `ok` and HTTP 503 when `degraded`**, so status-code monitors see it. While degraded, affected payments are HELD, never allowed.
+
+**`GET /health/live`** returns HTTP 200 `{"status": "alive"}` whenever the process is up. Point **alerting** at `/health`. Point **restart (liveness) probes** at `/health/live`: a mule-list outage must not trigger restarts, because the service is still answering safely (HOLD) and recording each HOLD for review.
 
 ## Logs
 
@@ -67,7 +69,7 @@ Logs never contain the account number, BSB, payee name, reference text or custom
 
 **Simulate a mule-list outage**
 1. Set `"dependencies": {"mule_list_enabled": false}` in `config/rules.json`.
-2. `GET /health` → `degraded`, `mule_list: disabled`. Every payment → HOLD `MULE_LIST_UNAVAILABLE`.
+2. `GET /health` → HTTP 503 `degraded`, `mule_list: disabled` (`/health/live` stays 200). Every payment → HOLD `MULE_LIST_UNAVAILABLE`.
 3. Set it back to `true` to recover. Deleting, corrupting or emptying `sample-data/mule_accounts.json` (or setting `mule_list_min_entries` above its size) has the same effect, but reports `down`.
 
 **Roll back**
@@ -103,7 +105,7 @@ Logs never contain the account number, BSB, payee name, reference text or custom
 | Mule list | JSON file, switch in config | Upstream service call with a short timeout, circuit breaker and bounded cache; fail-closed rules unchanged |
 | Config | File reloaded on change | Versioned config repo, risk-owner approval, GitOps rollout |
 | Secret | Environment variable with a dev default | Cloud secrets manager, rotation |
-| Logs and status | stdout JSON, `/health` | Central log platform, dashboards, alerts on degraded mode, `ENGINE_ERROR` rate, p99 latency, config hash change |
+| Logs and status | stdout JSON, `/health` (503 when degraded), `/health/live` | Central log platform, dashboards, alerts on degraded mode, `ENGINE_ERROR` rate, p99 latency, config hash change |
 | Access | None (out of scope) | Service-to-service auth for the channel; analyst roles for the review queue |
 | CI/CD | `verify.sh`; GitHub Actions runs it on Python 3.11–3.13 | Pipeline below |
 

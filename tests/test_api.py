@@ -339,3 +339,32 @@ def test_mule_list_minimum_size_is_configurable(env):
     env.edit_config(lambda d: d["dependencies"].update(mule_list_min_entries=3))
     assert env.client.get("/health").json()["status"] == "ok"
     assert env.assess(payment(payment_id=pid(45))).json()["decision"] == "ALLOW"
+
+
+# ---------- assessment regression: D3 health status code ----------
+
+@pytest.mark.parametrize("cause", ["mule_switched_off", "mule_file_missing", "mule_list_empty", "config_stale", "database_down"])
+def test_health_returns_503_while_degraded_and_liveness_stays_200(env, monkeypatch, cause):
+    """Assessment D3: /health returned HTTP 200 while degraded, so status-code monitors missed it."""
+    ok = env.client.get("/health")
+    assert (ok.status_code, ok.json()["status"]) == (200, "ok")
+    if cause == "mule_switched_off":
+        env.edit_config(lambda d: d["dependencies"].update(mule_list_enabled=False))
+    elif cause == "mule_file_missing":
+        env.mules.unlink()
+    elif cause == "mule_list_empty":
+        env.mules.write_text('{"accounts": []}', encoding="utf-8")
+    elif cause == "config_stale":
+        env.edit_config(lambda d: d["thresholds"].update(new_payee_warn_amount="-1"))
+    else:
+        monkeypatch.setattr(env.app.state.shield.db, "ping", lambda: False)
+    degraded = env.client.get("/health")
+    assert (degraded.status_code, degraded.json()["status"]) == (503, "degraded")
+    live = env.client.get("/health/live")
+    assert (live.status_code, live.json()) == (200, {"status": "alive"})
+    # Still answering payments safely while degraded: mule problems HOLD; a stale config keeps
+    # the last good rules, so a clean payment is still ALLOWED.
+    if cause.startswith("mule"):
+        assert env.assess(payment(payment_id=pid(50))).json()["decision"] == "HOLD"
+    elif cause == "config_stale":
+        assert env.assess(payment(payment_id=pid(50))).json()["decision"] == "ALLOW"

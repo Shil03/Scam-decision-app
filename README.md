@@ -49,7 +49,7 @@ python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 ./verify.sh                        # Windows (Git Bash): bash verify.sh
 ```
 
-It runs environment, config and repository-hygiene checks, then **all 177 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 177 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
+It runs environment, config and repository-hygiene checks, then **all 182 tests**, including the 36-scenario labelled suite. It exits non-zero on any failure and writes `reports/scenario-report.md`. The last run passed 182 tests, 36/36 scenarios, exit code 0. GitHub Actions runs the same script on every push ([.github/workflows/verify.yml](.github/workflows/verify.yml)).
 
 ## Example
 
@@ -96,7 +96,7 @@ The other samples give **ALLOW** (`allow-known-payee.json`), **WARN** with `PAYE
 
 ### Try the safety behaviour
 
-- **Mule-list outage:** set `"mule_list_enabled": false` in [config/rules.json](config/rules.json). Every payment is then HELD with `MULE_LIST_UNAVAILABLE`, and `/health` reports `degraded`. No restart is needed.
+- **Mule-list outage:** set `"mule_list_enabled": false` in [config/rules.json](config/rules.json). Every payment is then HELD with `MULE_LIST_UNAVAILABLE`, and `/health` reports `degraded` with HTTP 503. No restart is needed.
 - **Tune a threshold:** change any value under `thresholds`, and bump `ruleset_version`. The next decision uses it. `GET /config/rules` shows the active values.
 
 ## API
@@ -106,7 +106,8 @@ The other samples give **ALLOW** (`allow-known-payee.json`), **WARN** with `PAYE
 | POST | `/payments/assess` | Assess a payment: 200 ALLOW / WARN / HOLD, 422 / 409 / 413 REJECT |
 | GET | `/review-queue` | Held payments, most urgent first |
 | GET | `/review-queue/{payment_id}` | Reasons, signals and ruleset for one held payment |
-| GET | `/health` | `ok` or `degraded`, with mule list, database and config state |
+| GET | `/health` | HTTP 200 `ok` or **HTTP 503 `degraded`**, with mule list, database and config state |
+| GET | `/health/live` | HTTP 200 whenever the process is up (for restart / liveness probes) |
 | GET | `/config/rules` | Active thresholds, ruleset version and config hash (no secrets) |
 
 ## Project layout
