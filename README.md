@@ -15,6 +15,14 @@ Every non-REJECT response carries at least one **reason code**, the **ruleset ve
 
 **What this is not:** there is no ML or fraud score, no authentication, no real payment rails or bank integrations, no customer UI, and no cloud deployment. All of these are out of scope (see [evidence/intent.md](evidence/intent.md)). All data is synthetic.
 
+## My approach
+
+- **The idea and requirements are mine.** I defined the problem, users, the four decisions, the fail-closed rule and the success criteria in [evidence/intent.md](evidence/intent.md) before any code was written.
+- **I directed the build in gated steps.** I approved the design before any code, then gave my own specifications for the engine (reason codes, response contract), the API and persistence (endpoints, unique IDs, privacy) and the test suite. Each step was reviewed, timed ([TIMELOG.md](TIMELOG.md)) and committed.
+- **I made the judgement calls.** Hold every payment during a mule-list outage; fix only critical defects late in the timebox; leave remote access to a known payee as a WARN pending a business decision ([evidence/decisions.md](evidence/decisions.md)).
+- **I didn't trust green tests.** I commissioned an independent review and a technical assessment, which found and fixed real defects. One was a fail-open path that 159 passing tests had missed. My own hand testing from a clean checkout found three more issues.
+- **Claude Code was my implementation agent.** It wrote most of the code under my direction; I own the outcome. See [evidence/agentic-workflow.md](evidence/agentic-workflow.md).
+
 ## Prerequisites
 
 - **Python 3.11 or newer.** Developed on 3.15; CI runs 3.11, 3.12 and 3.13.
