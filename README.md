@@ -111,7 +111,8 @@ The other samples give **ALLOW** (`allow-known-payee.json`), **WARN** with `PAYE
 
 ### Try the safety behaviour
 
-- **Mule-list outage:** set `"mule_list_enabled": false` in [config/rules.json](config/rules.json). Every payment is then HELD with `MULE_LIST_UNAVAILABLE`, and `/health` reports `degraded` with HTTP 503. No restart is needed.
+- **Mule account match:** the synthetic mule list is [sample-data/mule_accounts.json](sample-data/mule_accounts.json): `999-001 / 11110001`, `999-001 / 11110002` and `999-002 / 22220001`. In `/docs`, take the ALLOW example, give it a new `payment_id` (e.g. `PMT-MULE-0001`), and set `"bsb": "999-001", "account_number": "11110001"`. Expect **HOLD `MULE_ACCOUNT_MATCH`**, at priority 1 in `GET /review-queue`.
+- **Mule-list outage:** set `"mule_list_enabled": false` in [config/rules.json](config/rules.json) and save. No restart is needed. `/health` then reports `degraded` with HTTP 503. Send the ALLOW example with a **new `payment_id`**: it is now **HOLD `MULE_LIST_UNAVAILABLE`**. Re-sending an old `payment_id` just replays its stored answer. Set the value back to `true` afterwards.
 - **Tune a threshold:** change any value under `thresholds`, and bump `ruleset_version`. The next decision uses it. `GET /config/rules` shows the active values.
 
 ## API
